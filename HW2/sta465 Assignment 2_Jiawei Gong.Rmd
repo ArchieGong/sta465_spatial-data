@@ -1,0 +1,854 @@
+---
+title: "STA465 hw2"
+author: "Jiawei Gong"
+date: "10/15/2024"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+#  {.tabset}
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Setup
+
+```{r, results = 'hide', message = FALSE, warning = FALSE}
+library(tidyverse)
+library(leaflet)
+library(sf)
+library(geoR)
+library(fields)
+library(maps)
+library(mapdata)
+library(units)
+
+data.dir = gsub('/code', '/data', getwd())
+```
+
+```{r, results = 'hide', message = FALSE, warning = FALSE}
+library(geoR)
+
+# Define spatial parameters for the Matérn function
+kappa <- 0.5  # Smoothness
+phi <- 0.1    # Range
+sigma2 <- 1   # Partial sill
+tau2 <- 0.1   # Nugget
+
+# Simulate Gaussian random field using Matérn covariance
+grf_simulation <- grf(n = 100, grid = "reg", cov.model = "matern", 
+                      cov.pars = c(sigma2, phi), nugget = tau2, kappa = kappa)
+
+# Plot the simulated field
+plot(grf_simulation)
+variogram_empirical <- variog(grf_simulation)
+```
+
+## Part A. 1 (a)
+
+```{r, results = 'hide', message = FALSE, warning = FALSE}
+set.seed(123)  
+n <- 200
+coords <- cbind(runif(n, 0, 10), runif(n, 0, 10)) 
+grf_data <- grf(n, grid=coords, cov.model="matern", cov.pars=c(20, 5), kappa=0.5, nugget = 0.5)
+```
+
+```{r}
+matern_simulation<-variog(grf_data,option="cloud")
+plot(matern_simulation,xlab="Distance (h)", main= 'semivariance of all pairs of point')
+```
+
+```{r}
+matern_simulation_bin<-variog(grf_data,uvec=seq(0,matern_simulation$max.dist,l=20),option="bin", estimator.type="modulus")
+
+plot(matern_simulation_bin, xlab="Distance (h)",main = "empirical semi-variogram")
+```
+
+By eyeball, the parameters are:
+
+1\. sigma2 \<- sill-nugget = 20.5-0.5 = 20\
+2. phi \<- 6\
+3. tau2 \<- 0.5\
+
+The eyeballed estimate of the spatial parameters conform with the intuition given the spatial process I simulated. In the simulation process, we set sigma2=20, phi=5, tau2= 0.5, which are similar to the eyeballed estimates.
+
+#################################################################### 
+
+## Part A. 1. (b)
+
+```{r}
+#########     Matern function    #########
+#ols
+
+matern_ols=variofit(matern_simulation_bin, ini.cov.pars=c(20, 5),nugget=0.5,fix.nugget=FALSE,max.dist=10,cov.model='matern', weights="equal")
+
+plot(matern_simulation_bin, xlab="Distance (h)",main = "empirical semi-variogram")
+lines(matern_ols,col="blue",lwd=1.5)
+
+summary(matern_ols)
+```
+
+```{r}
+#########     Matern function    #########
+# wls
+matern_wls=variofit(matern_simulation_bin,ini.cov.pars=c(20,5),nugget=0.5,fix.nugget=FALSE,cov.model='matern',weights='cressie')
+
+plot(matern_simulation_bin, xlab="Distance (h)",main = "empirical semi-variogram")
+lines(matern_wls,col="blue",lwd=1.5)
+
+summary(matern_wls)
+```
+
+```{r}
+#########     Matern function    #########
+# MLE
+matern_mle=likfit(grf_data,ini.cov.pars=c(20,5),nugget=0.5, fix.nugget=FALSE, cov.model='matern', lik.method='ML')
+
+plot(matern_simulation_bin, xlab="Distance (h)",main = "empirical semi-variogram")
+lines(matern_mle,col="blue",lwd=1.5)
+
+summary(matern_mle)
+```
+
+```{r}
+#########     Matern function    #########
+# Restricted MLE
+matern_reml=likfit(grf_data,ini.cov.pars=c(20,5),nugget=0.5, fix.nugget=FALSE, cov.model='matern', lik.method='REML')
+
+plot(matern_simulation_bin, xlab="Distance (h)",main = "empirical semi-variogram")
+lines(matern_reml,col="blue",lwd=1.5)
+
+summary(matern_reml)
+```
+
++-----------------------+-----------------+-------------------------+----------------+---------+---------+---------+
+| Matern Function       | **tau(nugget)** | **sigma2(sill-nugget)** | **phi(range)** | **SSE** | **AIC** | **BIC** |
++-----------------------+-----------------+-------------------------+----------------+---------+---------+---------+
+| True values           | 0.5             | 20                      | 5              | \       | \       | \       |
++-----------------------+-----------------+-------------------------+----------------+---------+---------+---------+
+| OLS Estimated Values  | 0.22            | 23.86                   | 4.81           | 23.18   | \       | \       |
++-----------------------+-----------------+-------------------------+----------------+---------+---------+---------+
+| WLS Estimated Values  | 0.90            | 28.59                   | 7.00           | 172.41  | \       | \       |
++-----------------------+-----------------+-------------------------+----------------+---------+---------+---------+
+| ML Estimated Values   | 0.51            | 16                      | 4.07           | \       | 813.9   | 827.1   |
++-----------------------+-----------------+-------------------------+----------------+---------+---------+---------+
+| REML Estimated Values | 0.53            | 23.99                   | 6.26           | \       | 805.1   | 818.2   |
++-----------------------+-----------------+-------------------------+----------------+---------+---------+---------+
+
+```{r}
+#########     Gaussian function    #########
+#ols
+
+gaussian_ols=variofit(matern_simulation_bin, ini.cov.pars=c(20,5),nugget=0.5,fix.nugget=FALSE,max.dist=10,cov.model='gaussian', weights="equal")
+
+plot(matern_simulation_bin, xlab="Distance (h)",main = "empirical semi-variogram")
+lines(gaussian_ols,col="blue",lwd=1.5)
+
+summary(gaussian_ols)
+```
+
+```{r}
+#########     Gaussian function    #########
+# wls
+gaussian_wls=variofit(matern_simulation_bin,ini.cov.pars=c(20,5),nugget=0.5,fix.nugget=FALSE,max.dist=10,cov.model='gaussian',weights='cressie')
+
+plot(matern_simulation_bin, xlab="Distance (h)",main = "empirical semi-variogram")
+lines(gaussian_wls,col="blue",lwd=1.5)
+
+summary(gaussian_wls)
+```
+
+```{r}
+#########     Gaussian function    #########
+# MLE
+gaussian_mle=likfit(grf_data,ini.cov.pars=c(20,5),nugget=0.5, fix.nugget=FALSE, cov.model='gaussian', lik.method='ML')
+
+plot(matern_simulation_bin, xlab="Distance (h)",main = "empirical semi-variogram")
+lines(gaussian_mle,col="blue",lwd=1.5)
+
+summary(gaussian_mle)
+```
+
+```{r}
+#########     Gaussian function    #########
+# Restricted MLE
+gaussian_reml=likfit(grf_data,ini.cov.pars=c(20,5),nugget=0.5, fix.nugget=FALSE, cov.model='gaussian', lik.method='REML')
+
+plot(matern_simulation_bin, xlab="Distance (h)",main = "empirical semi-variogram")
+lines(gaussian_reml,col="blue",lwd=1.5)
+
+summary(gaussian_reml)
+```
+
++-----------------------+-----------------+-------------------------+----------------+---------+---------+---------+
+| **Gaussian Function** |                 |                         |                |         |         |         |
++-----------------------+-----------------+-------------------------+----------------+---------+---------+---------+
+|                       | **tau(nugget)** | **sigma2(sill-nugget)** | **phi(range)** | **SSE** | **AIC** | **BIC** |
++-----------------------+-----------------+-------------------------+----------------+---------+---------+---------+
+| True values           | 0.5             | 20                      | 5              | \       | \       | \       |
++-----------------------+-----------------+-------------------------+----------------+---------+---------+---------+
+| OLE Estimated Values  | 2.58            | 17.06                   | 3.80           | 16.94   | \       | \       |
++-----------------------+-----------------+-------------------------+----------------+---------+---------+---------+
+| WLS Estimated Values  | 3.48            | 16.54                   | 4.01           | 117.32  | \       | \       |
++-----------------------+-----------------+-------------------------+----------------+---------+---------+---------+
+| ML Estimated Values   | 2.35            | 10.31                   | 2.39           | \       | 838.8   | 852     |
++-----------------------+-----------------+-------------------------+----------------+---------+---------+---------+
+| REML Estimated Values | 2.37            | 11.07                   | 2.46           | \       | 831.5   | 844.7   |
++-----------------------+-----------------+-------------------------+----------------+---------+---------+---------+
+
+For both Matern and Gaussian functions, estimated Values by OLS are the most close to the true value. Second accurate method is WLS, and then REML, and then ML.\
+And the estimates using Gaussian functions are all less accurate than Matern functions.
+
+(1) In OLS method, the goal is to minimize $\sum_{i=1}^{n}(Y_i-f(\mathbf{X_i,\theta}))^2$, where $Y_i$ is the true value, and $f(\mathbf{X_i,\theta})$ is the predicted value. OLS minimizes the residuals without weighting, so it is sensitive to large distances.
+(2) In WLS method, the goal is to minimize $\frac{1}{2} \sum_{j=1}^{K} \frac{N(h_j)}{\hat{\gamma}(h_j)} \left[ \hat{\gamma}(h_j) - \gamma(h_j) \right]^2$. This method assign more weight to observations with shorter distances, because it's reasonable to believe that short-distance data has more effect than long-distance data.
+(3) The goal of ML method is to find the parameter estimates that maximize the likelihood function. It requires spatial data to follow a multivariate Gaussian distribution and have second-order stationarity.
+(4) REML is a variation of ML method. It considers the loss of degrees of freedom when estimating the mean. And it essentially maximizes the likelihood of the residuals rather than the data itself. And this method is good when there is a trend in the spatial data.
+
+## Part A. 1. (c)
+
+```{r}
+set.seed(1007249951)  
+n <- 200  # Number of points
+coords1 <- cbind(runif(n, 0, 10), runif(n, 0, 10))  
+grf_data1 <- grf(n, grid=coords1, cov.model="matern", cov.pars=c(20, 5), kappa=0.5, nugget = 0.5)
+
+set.seed(10072499)  
+n <- 200  # Number of points
+coords2 <- cbind(runif(n, 0, 10), runif(n, 0, 10))  
+grf_data2 <- grf(n, grid=coords2, cov.model="matern", cov.pars=c(20, 5), kappa=0.5, nugget = 0.5)
+```
+
+```{r}
+#The chosen model is matern funciton using OLS
+#########     Matern function    #########
+#ols
+#For the first dataset:
+matern_simulation1<-variog(grf_data1,option="cloud")
+matern_simulation_bin1<-variog(grf_data1,uvec=seq(0,matern_simulation1$max.dist,l=20),option="bin", estimator.type="modulus")
+
+gaussian_ols_grf1=variofit(matern_simulation_bin1, ini.cov.pars=c(20,5),nugget=0.5,fix.nugget=FALSE,max.dist =8, cov.model='matern', weights="equal")
+
+plot(matern_simulation_bin1, xlab="Distance (h)",main = "empirical semi-variogram")
+lines(gaussian_ols_grf1,col="blue",lwd=1.5)
+
+summary(gaussian_ols_grf1)
+```
+
+```{r}
+#########     Matern function    #########
+#ols
+#For the second dataset:
+matern_simulation2<-variog(grf_data2,option="cloud")
+matern_simulation_bin2<-variog(grf_data2,uvec=seq(0,matern_simulation2$max.dist,l=20),option="bin", estimator.type="modulus")
+
+gaussian_ols_grf2=variofit(matern_simulation_bin2, ini.cov.pars=c(20,5),nugget=0.5,fix.nugget=FALSE,max.dist =10,cov.model='matern', weights="equal")
+
+plot(matern_simulation_bin2, xlab="Distance (h)",main = "empirical semi-variogram")
+lines(gaussian_ols_grf2,col="blue",lwd=1.5)
+
+summary(gaussian_ols_grf2)
+```
+
++-------------+-------------+---------------------------------------+--------------------------------------------+---------------------------------------------+
+|             | True value  | Model using the simulated data in (a) | Model using the first newly simulated data | Model using the second newly simulated data |
++=============+=============+=======================================+============================================+=============================================+
+| tau2        | 0.5         | 0.22                                  | 0.91                                       | 0.00                                        |
++-------------+-------------+---------------------------------------+--------------------------------------------+---------------------------------------------+
+| sigma2      | 20          | 23.86                                 | 23.37                                      | 55.43                                       |
++-------------+-------------+---------------------------------------+--------------------------------------------+---------------------------------------------+
+| phi         | 5           | 4.81                                  | 5.35                                       | 13.35                                       |
++-------------+-------------+---------------------------------------+--------------------------------------------+---------------------------------------------+
+
+################################################################################################## For the first simulated data, the estimates are very similar to the original ones from (a). But the estimates from the second simulated data are very different. This results show that parameter estimates from these models depend greatly on the simulated dataset.
+
+Additionally, I also find out the argument 'max.dist=' has a huge effect on the estimates.
+
+## Part B. 2.
+
+```{r}
+dorian <- read.csv("/Users/davegong/Desktop/year4 fall/sta465/HW2/dorian.csv") 
+head(dorian)
+
+
+dorian = dorian %>% 
+  st_as_sf(coords=c('lon','lat'), crs=4326, remove=FALSE) %>% #set datum
+          st_transform(crs=32617) %>% #project to UTM 11 (meters)
+          mutate(x = st_coordinates(.)[,1]/1000, y = st_coordinates(.)[,2]/1000) # extract x, y in km
+
+head(dorian)
+```
+
+```{r}
+dorian1 <- dorian %>% st_drop_geometry()
+dorian1$logwind<-log(dorian1$wind.sp)
+
+head(dorian1)
+dorian1_wind<-as.geodata(dorian1,coords.col=c(10,11),data.col=7)
+
+semi_var_wind<-variog(dorian1_wind,option="cloud")
+semi_var_wind_bin<-variog(dorian1_wind,uvec=seq(0,365,l=30),option="bin",estimator.type="modulus")
+plot(semi_var_wind_bin,xlab="Distance (h)",main = "empirical semi-variogram")
+#lines(gaussian_ols_grf2,col="blue",lwd=1.5)
+```
+
+```{r}
+#Gaussian 
+#WLS
+wind_gaussian_wls=variofit(semi_var_wind_bin,ini.cov.pars=c(25,300),nugget=0.5,fix.nugget=FALSE,max.dist=270, cov.model='gaussian',weights='cressie')
+summary(wind_gaussian_wls)
+
+plot(semi_var_wind_bin,xlab="Distance (h)",main = "empirical semi-variogram")
+lines(wind_gaussian_wls,col="blue",lwd=1.5)
+```
+
+```{r}
+#Gaussian 
+#ML
+wind_gaussian_mle=likfit(dorian1_wind,ini.cov.pars=c(20,500),nugget=0.5, fix.nugget=FALSE, cov.model='gaussian', lik.method='ML', limits = pars.limits(phi = c(0, 400), sigmasq = c(0, 40)))
+summary(wind_gaussian_mle)
+plot(semi_var_wind_bin,xlab="Distance (h)",main = "empirical semi-variogram")
+lines(wind_gaussian_mle,col="blue",lwd=1.5)
+```
+
+```{r}
+#Exponential 
+#WLS
+wind_Exponential_wls=variofit(semi_var_wind_bin,ini.cov.pars=c(4,500),nugget=0.5,fix.nugget=FALSE,max.dist=300,cov.model='exponential',weights='cressie')
+summary(wind_Exponential_wls)
+plot(semi_var_wind_bin,xlab="Distance (h)",main = "empirical semi-variogram")
+lines(wind_Exponential_wls,col="blue",lwd=1.5)
+```
+
+```{r}
+#Exponential 
+#ML
+wind_Exponential_mle=likfit(dorian1_wind,ini.cov.pars=c(10,500),nugget=0.5, fix.nugget=FALSE, cov.model='exponential', lik.method='ML',limits = pars.limits(phi = c(0, 500), sigmasq = c(0, 40)))
+summary(wind_Exponential_mle)
+plot(semi_var_wind_bin,xlab="Distance (h)",main = "empirical semi-variogram")
+lines(wind_Exponential_mle,col="blue",lwd=1.5)
+```
+
+```{r}
+#Matern 
+#WLS
+wind_Matern_wls=variofit(semi_var_wind_bin,ini.cov.pars=c(30,300),nugget=0.5,fix.nugget=FALSE,cov.model='matern',weights='cressie', max.dis=200)
+summary(wind_Matern_wls)
+plot(semi_var_wind_bin,xlab="Distance (h)",main = "empirical semi-variogram")
+lines(wind_Matern_wls,col="blue",lwd=1.5)
+```
+
+```{r}
+#Matern 
+#ML
+wind_Matern_mle=likfit(dorian1_wind,ini.cov.pars=c(4,500),nugget=0.5, fix.nugget=FALSE, cov.model='matern', lik.method='ML')
+summary(wind_Matern_mle)
+plot(semi_var_wind_bin,xlab="Distance (h)",main = "empirical semi-variogram")
+lines(wind_Matern_mle,col="blue",lwd=1.5)
+```
+
++--------------+-------------+---------------------+------------+---------+---------+---------+
+| **Gaussian** |             |                     |            |         |         |         |
++--------------+-------------+---------------------+------------+---------+---------+---------+
+|              | tau(nugget) | sigma2(sill-nugget) | phi(range) | SSE     | AIC     | BIC     |
++--------------+-------------+---------------------+------------+---------+---------+---------+
+| WLS          | 2.84        | 5371.81             | 6087.68    | 180.63  |         |         |
++--------------+-------------+---------------------+------------+---------+---------+---------+
+| ML           | 3.486       | 43.3                | 400        |         | 283.6   | 292     |
++--------------+-------------+---------------------+------------+---------+---------+---------+
+
+|  |  |  |  |  |  |  |
+|----|----|----|----|----|----|----|
+| **Exponential** |  |  |  |  |  |  |
+|  | tau(nugget) | sigma2(sill-nugget) | phi(range) | SSE | AIC | BIC |
+| WLS | 0.63 | 29925.72 | 590422.9 | 238.4918 |  |  |
+| ML | 0.7215 | 43.57 | 500 |  | 284.2 | 292.7 |
+
++------------+-------------+---------------------+------------+---------+---------+---------+
+| **Matern** |             |                     |            |         |         |         |
++------------+-------------+---------------------+------------+---------+---------+---------+
+|            | tau(nugget) | sigma2(sill-nugget) | phi(range) | SSE     | AIC     | BIC     |
++------------+-------------+---------------------+------------+---------+---------+---------+
+| WLS        | 2.72        | 4125                | 27041      | 101.38  |         |         |
++------------+-------------+---------------------+------------+---------+---------+---------+
+| ML         | 0.72        | 43.57               | 500        |         | 284.2   | 292.7   |
++------------+-------------+---------------------+------------+---------+---------+---------+
+
+Describe the fitted parameters, and compare the models. Choose what you feel is the best model for the data.
+
+For the exponential, Gaussian, and Matern functions, the value of estimated parametres are very sensitive to max.dist. I have tried different max.dist. However, the the value estimated parametres still blow up and can not be relied on. In other words, the estimates are too far from the eye-balled estimates. Hence, the three models of Exponential, Gaussian, and Matern functions by WLS method fail.
+
+Clearly, we can see that estimates by ML method is more stable and less sensitive to the max.dist. Also, the estimates by ML are more close the eye-balled estimates. Actually, the three models by ML method have very similar AIC and BIC, so I choose model of Matern function by ML method as the best model.
+
+## Part C, 3
+
+```{r}
+#Create the grid
+#dorian1 <- dorian %>% st_drop_geometry()
+#dorian1_wind<-as.geodata(dorian1,coords.col=c(10,11),data.col=7)
+
+res=100
+xs=seq(min(dorian1$x),max(dorian1$x),len=res)
+ys=seq(min(dorian1$y),max(dorian1$y),len=res)
+myGrid=expand.grid(xs,ys)
+names(myGrid)=c('x','y')
+
+# make sure it looks correct
+plot(myGrid, pch=19, cex=0.5)
+```
+
+```{r}
+#I decide to use Matern ML
+#Ordinary kriging
+
+
+
+semi_var_wind_bin<-variog(dorian1_wind,uvec=seq(0,365,l=30),option="bin",estimator.type="modulus")
+wind_Matern_mle=likfit(dorian1_wind,ini.cov.pars=c(4,500),nugget=0.5, fix.nugget=FALSE, cov.model='matern', lik.method='ML')
+summary(wind_Matern_mle)
+
+plot(semi_var_wind_bin,xlab="Distance (h)",main = "empirical semi-variogram")
+lines(wind_Matern_mle,col="blue",lwd=1.5)
+```
+
+```{r}
+KCord<-krige.control(type.krige='ok',obj.m=wind_Matern_mle)
+ordinary_krige<-krige.conv(dorian1_wind,locations=myGrid,krige=KCord)
+#Plot the kriged estimates
+image.plot(xs,ys,matrix(ordinary_krige$predict,res,res,byrow=FALSE),col=tim.colors(32), main="Ordinary Kriging Predictions")
+
+#Plot the standard errors
+image.plot(xs,ys,matrix(sqrt(ordinary_krige$krige.var),res,res,byrow=FALSE),col=tim.colors(32), main="Ordinary Kriging Errors")
+```
+
+```{r}
+ordinary_krige$beta.est
+```
+
+### Parameters:
+
+estimated mean = 9.24032
+
+### What this kriging method is doing?
+
+Firstly, Kriging is a technique for spatial prediction, which aims to estimate the value of Z(s) at one or more unobserved locations based on observed samples. The basic steps of ordinary kriging is:
+
+1.  Choose a parametric model (Exponential in this question) for the semi-variance functions
+
+2.  Estimate the semivariogram parameters by WLS.
+
+3.  Make prediction, which is the weighted average of the chosen observed samples. The estimated semivariogram can indicate the strength of spatial association and therefore determines the weighting.
+
+4.  $\hat{Z}$(s) = $\sum_{i=1}^{N}w_{i}Z(s_i)$, with constraint $\sum_{i=1}^{N}w_{i}=1$. Also, we let $E[\hat{Z}(s_0)] = E[Z(s_0)] =\mu$. The goal is basically to minimize $E[(\hat{Z}(s_0)-Z(s_0))^2]$
+
+5.  Ordinary Kriging requires us to estimate a mean value, $\mu$, and assume $\mu$ is constant so that Z(s) = $\mu$ + $\epsilon$(s) for any location.
+
+6.  By Lagrange multiplier, we can get the equation: $\sum_{j}w_{j}C_{ij} +\lambda = C_{i0}$
+
+To solve the weights:
+
+$$
+\begin{pmatrix}
+\omega_1 \\
+\omega_2 \\
+\vdots \\
+\omega_N \\
+\lambda
+\end{pmatrix}
+=
+\begin{bmatrix}
+C_{11} & C_{12} & \cdots & C_{1N} & 1 \\
+C_{21} & C_{22} & \cdots & C_{2N} & 1 \\
+\vdots & \vdots & \ddots & \vdots & \vdots \\
+C_{N1} & C_{N2} & \cdots & C_{NN} & 1 \\
+1 & 1 & \cdots & 1 & 0
+\end{bmatrix}^{-1}
+\times
+\begin{pmatrix}
+C_{10} \\
+C_{20} \\
+\vdots \\
+C_{N0} \\
+1
+\end{pmatrix}
+$$ where $C_{i0} = Cov[Z(s_i),Z(s_0)]$ and $C_{ij} = Cov[Z(s_i),Z(s_j)]$
+
+7.  With the weights, we can make predictions using the formula: $\hat{Z}$(s) = $\sum_{i=1}^{N}w_{i}Z(s_i)$,
+
+## Part C, 4
+
+```{r}
+#Explore the trends in x-direction and y-direction
+plot(dorian1_wind)
+```
+
+We can see there is a trend along the x-direction by the plot
+
+```{r}
+summary(lm(wind.sp~x+y,data=dorian1))
+```
+
+```{r}
+summary(lm(wind.sp~x+y+I(x^2)+I(y^2)+ I(x*y),data=dorian1))
+```
+
+We can see Here x is significant in linear and quadratic trend check.
+
+```{r}
+#Compare linear and quadratic trend
+model_linear <- likfit(dorian1_wind, ini.cov.pars = c(6, 100), nugget = 0.5,
+                       fix.nugget = FALSE, cov.model = 'matern', 
+                       lik.method = 'ML', trend = '1st')
+model_quadratic <- likfit(dorian1_wind, ini.cov.pars = c(6, 100), nugget = 0.5,
+                          fix.nugget = FALSE, cov.model = 'matern', 
+                          lik.method = 'ML', trend = '2nd')
+# For the linear model
+print(AIC(model_linear))
+
+# For the quadratic model
+print(AIC(model_quadratic))
+```
+
+By comparing the AIC, we think linear trend is good enough for fitting.\
+
+```{r}
+#Matern 
+#ML
+wind_matern_mle_trend=likfit(dorian1_wind,ini.cov.pars=c(6,100), fix.nugget=FALSE, cov.model='matern', lik.method='ML',trend= '1st' )
+
+kriged_grid_trend=krige.conv(dorian1_wind,locations=myGrid, krige=krige.control(obj.model=wind_matern_mle_trend,trend.d='1st',trend.l='1st'))
+
+summary(wind_matern_mle_trend)
+```
+
+```{r}
+kriged_grid_trend$predict<-ifelse(kriged_grid_trend$predict<0,0,kriged_grid_trend$predict)
+# plot predictions
+image.plot(xs,ys,matrix(kriged_grid_trend$predict,res,res,byrow=FALSE),col=tim.colors(32), main="Predictions by Universal Kriging ML Linear Trend")
+##Plot the standard errors
+image.plot(xs,ys,matrix(sqrt(kriged_grid_trend$krige.var),res,res,byrow=FALSE),col=tim.colors(32), main="Universal Kriging Errors")
+```
+
+### Parameters
+
+$Z(x,y) = \mu + \beta_{1}x + \beta_{2}y + \epsilon(x,y)$ where $\mu$ = -31.011061546, $\beta_{1}$ = 0.025311543, $\beta_{2}$ = 0.005592862
+
+```{r}
+kriged_grid_trend$beta.est
+```
+
+### leaflet map
+
+```{r}
+res=100
+xs=seq(min(dorian1$lon),max(dorian1$lon),len=res)
+ys=seq(min(dorian1$lat),max(dorian1$lat),len=res)
+myGrid_1=expand.grid(xs,ys)
+names(myGrid_1)=c('x','y')
+
+
+preds = data.frame(myGrid_1, pred.wind=kriged_grid_trend$predict %>% as.vector)
+pred.pal = colorNumeric(c('darkgreen','gold1','brown'),
+                             domain=preds$pred.wind)
+
+  leaflet(preds) %>% 
+  addProviderTiles("CartoDB.Positron") %>% 
+  addCircles(lng=~x, lat=~y, color=~pred.pal(pred.wind),
+             opacity=.7, fillOpacity=.7, radius=1e3) %>% # points w/ 1KM radius
+  leaflet::addLegend('bottomleft', pal=pred.pal, values=preds$pred.wind,
+            title='Wind speed (m/s)', opacity=1)
+```
+
+### What this kriging method is doing?
+
+Continue from the description of ordinary kriging, the universal kriging differ from step 5
+
+5.  Universal Kriging assumes mean value varies in different locations. We assume there is a trend in x and y. i.e. Z(s) = $\mu (s)$ + $\epsilon$(s), where $\mu (s) = \sum_{k=1}^{p}\beta_{k}x_{k}(s)$
+
+    or we can write $Z(s) = MVN(X(s)\beta, \sum)$, where $X(s)\beta$ is responsible for catch the trend, so that $\sum$ can be residual small-scale variation.
+
+6.  In our model, we think linear trend fit is more appropriate, so this gives us the formula: $Z(x,y) = \mu + \beta_{1}x + \beta_{2}y + \epsilon(x,y)$, which is used for prediction.
+
+7.  Maximum Likelihood method is used to estimate $\beta$.
+
+$\mu$ = -31.011061546, $\beta_{1}$ = 0.025311543, $\beta_{2}$ = 0.005592862.\
+$\mu$ represents the baseline value of the trend when x=0 and y=0\
+$\beta_{1}$ model the linear trends in x-coordinate.\
+$\beta_{2}$ model the linear trends in y-coordinate.\
+For example, Both $\beta_{1}$ and $\beta_{2}$ are positive, so this means the wind speed increase along x-direction and y-direction.\
+We can see the value of $\beta_{1}$ is larger than $\beta_{2}$, which means the linear trend in x-coordinate is more significant than y-coordinate.
+
+## Part C, 5
+
+```{r}
+set.seed(1007249951) 
+train_index <- sample(1:nrow(dorian), size = 0.7 * nrow(dorian))
+train_set <- dorian[train_index, ]   # 70% training set
+test_set  <- dorian[-train_index, ]  # 30% test set
+
+dorian1_train <- train_set %>% st_drop_geometry()
+dorian1_wind_train<-as.geodata(dorian1_train,coords.col=c(10,11),data.col=7)
+
+dorian1_test <- test_set %>% st_drop_geometry()
+dorian1_wind_test<-as.geodata(dorian1_test,coords.col=c(10,11),data.col=7)
+
+
+wind_matern_mle_trend_train=likfit(dorian1_wind_train,ini.cov.pars=c(6,100), fix.nugget=FALSE, cov.model='matern', lik.method='ML',trend= '1st' )
+
+test_locations <- cbind(test_set$x, test_set$y)
+
+kriged_grid_trend_test_prediction=krige.conv(dorian1_wind_train,locations=test_locations, krige=krige.control(obj.model=wind_matern_mle_trend_train,trend.d='1st',trend.l='1st'))
+```
+
+```{r}
+#MSE
+predicted_wind_speed <- kriged_grid_trend_test_prediction$predict
+observed_wind_speed <- test_set$wind.sp 
+mse <- mean((observed_wind_speed - predicted_wind_speed)^2)
+print(paste("MSE:", mse))
+
+#R2
+ss_residual <- sum((observed_wind_speed - predicted_wind_speed)^2)
+ss_total <- sum((observed_wind_speed - mean(observed_wind_speed))^2)
+r_squared <- 1 - (ss_residual / ss_total)
+print(paste("R^2:", r_squared))
+```
+
+MSE: $\text{MSE} = \frac{1}{n} \sum_{i=1}^{n} \left( y_i - \hat{y}_i \right)^2$
+
+On average, for the wind speed, the squared difference between the true value and predicted value is 5.89.
+
+R\^2: $R^2 = 1 - \frac{\sum_{i=1}^{n} \left( y_i - \hat{y}_i \right)^2}{\sum_{i=1}^{n} \left( y_i - \bar{y} \right)^2}$
+
+82.97% of the variance in the variable, wind speed, can be explained by this model
+
+## Part D, 6
+
+```{r}
+library(tidyverse)
+library(leaflet)
+library(fields)
+library(sf)
+library(mgcv)
+library(mgcViz)
+library(nlme)
+```
+
+```{r}
+# Another predictor I choose is temperature
+#lm
+lm_model <- lm(wind.sp ~ x * y + temp, data = dorian)
+
+#gls
+gls_model_ratio <- gls(wind.sp ~ x * y + temp, 
+                       data = dorian, 
+                       correlation = corRatio(form = ~ x + y))
+
+gls_model_gaus <- gls(wind.sp ~ x * y + temp, 
+                      data = dorian, 
+                      correlation = corGaus(form = ~ x + y))
+
+gls_model_spher <- gls(wind.sp ~ x * y + temp, 
+                       data = dorian, 
+                       correlation = corSpher(form = ~ x + y))
+
+AIC(gls_model_ratio, gls_model_gaus, gls_model_spher)
+
+#gam
+gam_model_default_knot_temp<-gam(wind.sp~s(x,y,bs="ts")+ temp,data=dorian)
+plot(gam_model_default_knot_temp, main="GAM default k")
+
+```
+
+Since gls_model_spher has the smallest AIC, we decide best covariance structure is Spherical correlation structure.
+
+```{r}
+summary(lm_model)
+```
+
+```{r}
+summary(gls_model_spher)$tTable
+```
+
+```{r}
+summary(gam_model_default_knot_temp)
+```
+
+lm():
+
+$\beta_x$ = -6.671e-02, Standard error of x = 1.031e-01\
+$\beta_y$ = -9.997e-03, Standard error of y = 1.753e-02
+
+\
+gls_spher():
+
+$\beta_x$ = 8.559991e-02, Standard error of x = 2.954113e-01\
+$\beta_y$ = 2.349574e-02, Standard error of y = 5.388313e-02
+
+\
+gam():
+
+$\beta_{temp}$ = 0.2726, Standard error of temp = 0.2945\
+There are 29 basis functions(knots) in this gam() model. These functions constitute the smoother term, which model non-linear relationship between location and wind speed.
+
+The coefficients of x and y are both negative for lm(), while gls() has positive coefficients of x and y. The standard errors of x and y for lm() are smaller than standard errors of x and y for gls(). The coefficients in front of each s(x, y) represent the weights of each basis functions used for smooth modelling.
+
+```{r}
+AIC(lm_model, gls_model_spher, gam_model_default_knot_temp)
+```
+
+From the output, we can see gam() model has the smaller AIC, so GAM has the best model fitting.\
+
+1.  lm() assumes a linear relationship between the predictors(x,y, temp) and wind speed.\
+
+2.  gls() adds a spatial correlation structure by considering the relationship between observations based on their proximity. Here we have three different correlation structure. Essentially, each structure models how the correlation decreases as the distance between observations increases.\
+    (1)corRatio: Ratio correlation structure.
+
+    (2)corGaus: Gaussian correlation structure.
+
+    (3)corSpher: Spherical correlation structure.
+
+3.  gam() can help to model a smoother, non-linear relationships between the predictors (x, y, temp) and wind speed using splines (thin plate splines in this question).
+
+## Part D, 7
+
+```{r}
+#0.75*61 = 46
+gam_pm_large_K_temp<-gam(wind.sp~s(x,y,bs="ts",k=46, fx=TRUE)+temp,data=dorian)
+plot(gam_pm_large_K_temp, main="GAM large k")
+plot(gam_model_default_knot_temp, main="GAM default k")
+```
+
+### Compare
+
+From two contour plots, we can clearly see there are less contour lines for larger number of knots. This means the surface is smoother.This means the model becomes more flexible and can fit the data more closely. However, more knots means higher risk of over-fitting.
+
+```{r}
+res=100
+xs=seq(min(dorian1$x),max(dorian1$x),len=res)
+ys=seq(min(dorian1$y),max(dorian1$y),len=res)
+myGrid=expand.grid(xs,ys)
+names(myGrid)=c('x','y')
+
+#Default knot
+#Prediction
+gam_model_default_knot<-gam(wind.sp~s(x,y,bs="ts"),data=dorian)
+pred_gam<-predict.gam(gam_model_default_knot,myGrid,se.fit=TRUE)
+
+# Plot predictions
+image.plot(xs,ys,matrix(pred_gam$fit,res,res),col=tim.colors(32), main="predictions by GAM large k")
+points(dorian$x,dorian$y,pch=19,cex=0.3)
+
+#plot standard errors
+image.plot(xs,ys,matrix(pred_gam$se.fit,res,res),col=tim.colors(32), main="std.error by GAM large k")
+points(dorian$x,dorian$y,pch=19,cex=0.3)
+```
+
+```{r}
+#Larger knot
+gam_pm_large_K<-gam(wind.sp~s(x,y,bs="ts",k=46, fx=TRUE),data=dorian)
+#Prediction
+pred_gam_large_K<-predict.gam(gam_pm_large_K,myGrid,se.fit=TRUE)
+
+# Plot predictions
+image.plot(xs,ys,matrix(pred_gam_large_K$fit,res,res),col=tim.colors(32), main="predictions by GAM large k")
+points(dorian$x,dorian$y,pch=19,cex=0.3)
+
+#plot standard errors
+image.plot(xs,ys,matrix(pred_gam_large_K$se.fit,res,res),col=tim.colors(32), main="std.errors by GAM large k")
+points(dorian$x,dorian$y,pch=19,cex=0.3)
+```
+
+### Difference:
+
+Similarly, there are less contour lines for larger number of knots. This means the surface is smoother.This means the model becomes more flexible and can fit the data more closely.
+
+### why can’t we create a map using GAM models with covariates
+
+-   The value of covariates, such as temp, is not available across the whole grid. Therefore, for some locations where the value of temperature is unknown, the model can not predicts, because the model requires the temperature as its input.
+
+-   However, the value of x and y is available everywhere. Hence, the spatial-only gam() model can predict the wind speed everywhere and create a map.
+
+    # Part D, 8
+
+```{r}
+
+gam_residuals <- residuals(gam_pm_large_K)
+lm_residuals <- residuals(lm_model)
+gls_residuals <- residuals(gls_model_spher)
+
+gam_data <- data.frame(x = dorian$x, y = dorian$y, gam_residuals = gam_residuals)
+lm_data <- data.frame(x = dorian$x, y = dorian$y, lm_residuals = lm_residuals)
+gls_data <- data.frame(x = dorian$x, y = dorian$y, gls_residuals = gls_residuals)
+
+gam_geodata <- as.geodata(gam_data, coords.col = 1:2, data.col = 3)
+lm_geodata <- as.geodata(lm_data, coords.col = 1:2, data.col = 3)
+gls_geodata <- as.geodata(gls_data, coords.col = 1:2, data.col = 3)
+
+
+aaaaa<-variog(gam_geodata,option="cloud")
+variog_gam<-variog(gam_geodata,uvec=seq(0,aaaaa$max.dist,l=20),option="bin", estimator.type="modulus")
+
+bbbbb<-variog(lm_geodata,option="cloud")
+variog_lm<-variog(lm_geodata,uvec=seq(0,bbbbb$max.dist,l=20),option="bin", estimator.type="modulus")
+
+ccccc<-variog(gls_geodata,option="cloud")
+variog_gls<-variog(gls_geodata,uvec=seq(0,ccccc$max.dist,l=20),option="bin", estimator.type="modulus")
+# Compute the semivariograms
+#variog_gam <- variog(gam_geodata)
+#variog_lm <- variog(lm_geodata)
+#variog_gls <- variog(gls_geodata)
+
+plot(variog_gam, main = "Semivariogram: GAM Residuals")
+plot(variog_lm, main = "Semivariogram: LM Residuals")
+plot(variog_gls, main = "Semivariogram: GLS Residuals")
+```
+
+1.  GAM: sill is around 0.4, phi is around 500, and nugget is around 0.4 The semivariogram is very flat compared to other two, which means residuals are uncorrelated in space. This is a good sign because this means there is no spatial correlation structure in the residuals. This means this model has captured almost all the spatial correlation structure.
+
+2.  LM: sill is around 15, phi is around 500, and nugget is around 0. There is a rising pattern of semivariance of residuals as distance increases, meaning there are spatial correlation between residuals. So the model has not fully accounted for the spatial correlation in the data.
+
+3.  GLS: sill is around 15, phi is around 500, and nugget is around 0. Similarly, there is a rising pattern of semivariance of residuals as distance increases. The difference from LM is that GLS has a smoother trend in the bin plot, because GLS considers the relationship between observations based on their proximity
+
+## Part D, 9
+
+```{r}
+idw<-function(data,locs,newlocs,p){
+  dists<-rdist(newlocs,locs)
+  return(((dists^(-p))%*%data)/((dists^(-p))%*%rep(1,length(data)))) 
+}
+
+# testing different p
+idwPred6<-idw(dorian$wind.sp,cbind(dorian$x,dorian$y),myGrid,p=6)
+idwPred12<-idw(dorian$wind.sp,cbind(dorian$x,dorian$y),myGrid,p=12)
+
+# plotting the results on our grid
+image.plot(xs,ys,matrix(idwPred6,res,res),col=tim.colors(32), main="p=6")
+points(dorian$x,dorian$y,pch=19,cex=0.3)
+
+image.plot(xs,ys,matrix(idwPred12,res,res),col=tim.colors(32), main="p=12")
+points(dorian$x,dorian$y,pch=19,cex=0.3)
+```
+
+$\hat{z}_0 = \frac{\sum_{i} Z(s_i) d(s_i, s_0)^{-p}}{\sum_{i} d(s_i, s_0)^{-p}}$
+
+-   When p is small, distant points have a greater influence on the prediction. This leads to a smoother surface because the interpolation considers a larger neighborhood of points.
+
+-   When p is large, distant points have a smaller influence on the prediction. This leads to a less smoother surface with sharper changes between areas with different wind speed.
+
+-   **Advantages**:
+
+    IDW is computationally efficient and does not require complet data preprocessing.
+
+    IDW allows us to adjust the influence of distant points according to our will. For example, IDM allows us to gives more weight to nearby points, if local points are important for prediction.
+
+    IDW does not require to have assumption of any spatial stationarity.
+
+-   **Disadvantages**:
+
+    The choice of p can significantly affect the results, so requires hyper-parameter tuning.
+
+    IDW only considers distance. IDW does not consider the spatial correlation structure of the data by using the variogram, like Kriging does.
+
+    There is no statistical estimation of the standard errors for predictions in IDW\
