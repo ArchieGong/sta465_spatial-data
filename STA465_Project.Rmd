@@ -1,0 +1,531 @@
+---
+title: "STA465 Project Plan"
+author: "Jiawei Gong"
+date: "11/8/2024"
+output:
+  pdf_document: default
+  html_document: default
+editor_options: 
+  markdown: 
+    wrap: sentence
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(leaflet) 
+library(sf) 
+library(units) 
+library(spdep) # areal analysis
+library(spData) 
+library(dplyr)
+library(ggplot2)
+library(leaflet) 
+library(htmlwidgets) 
+library(sf) 
+library(knitr)
+library(ggmap) 
+library(units)
+library(dplyr)
+library(kableExtra)
+data.dir = gsub('/code', '/data', getwd())
+
+```
+
+# Background
+
+From the data published by Toronto Transportation Services, there are 695 motor vehicle collisions with killed or seriously injured persons within City of Toronto in 2023, which means 2 serious collision occur per day occur in average.
+It's not surprised that collision may happen in cluster in some neighborhoods due to specific traffic factors.
+These reasons can be road condition, driver condition, and so on.
+City of Toronto government has put efforts to prevent collision by building more road safety infrastructure such as traffic camera and street light poles.
+However, the budget is limited.
+It's necessary to take full advantage of infrastructure by making sure they are built in the the places where they are needed most, in other words, where collision occurs frequently.
+
+# Research Question
+
+This brings up our research questions: Does these infrastructure including traffic cameras, street light poles, and traffic signals poles help to reduce the occurrence of vehicle collisions in Toronto?
+
+# Decomposition of the Question
+
+To analyze and fully understand this question, we can decompose it into several parts:
+
+1.  Globally, is there strong evidence showing that collisions occur in cluster?
+    Locally, which areas in Toronto have a cluster of collision?
+
+2.  Collision can be categorized by their driver condition, road condition, and location.
+    For every category, we check if collisions occur in cluster both globally and locally.
+
+    -   In this project, for driver condition, we main focus on (1)drunk driver (2)speeding driver (3)careless driver.
+
+    -   For road condition, we mainly focus on (1)light condition,
+
+    -   For location, we main focus on (1)red lights (2)Stop Signs (3)No control
+
+3.  For the traffic safety infrastructure, we mainly focus on the influence of (1)traffic camera (2)street light poles (3)Traffic signal poles (4)red light camera (5)traffic calming infrastructure.
+    For each type of infrastructure, we want to know if they prevent collision.
+
+4.  Furthermore, we can explore the effect of one type of infrastructure on one specific type of collision.
+    For example:
+
+    -   Does traffic calming infrastructure reduce the number of collision caused by speeding driver?
+
+    -   Does red light camera reduce the number of collision near to red lights?
+
+# Data Description
+
+### Dataset 1: 'Toronto Neighbor'
+
+-   This dataset is provided in class.
+    It contains 140 neighborhoods in Toronto in the form of multi-polygon shapefile.
+    Also, it contains the area and distribution of the population by sex/age in each neighborhood.
+
+-   This dataset is mainly used for providing a clear boundary of each neighborhood, so that data in other shapefile can be grouped based on which neighborhood they are located in.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+neighborhoods_data  <- st_read(paste0(data.dir, "/Toronto_Neighbourhoods/Toronto_Neighbourhoods.shp"))
+
+leaflet(data = neighborhoods_data) %>%
+  addTiles() %>%  
+  addPolygons(fillColor = "lightblue", color = "darkblue", weight = 1,
+              fillOpacity = 0.5, popup = ~paste("Neighborhood:", neighborhoods_data$Neighbourh))  
+```
+
+### Dataset 2: 'Edge of Road'
+
+-   This dataset consists all the roadway, highway, and any way that a vehicle can pass in Toronto.
+
+-   Multi-Polygon shapefile.
+    Every road is represented as **polygons rather than lines!**
+
+-   It's crucial to realize that different neighborhood may have different total length of roads.
+    The total length of road can affect the number of collisions, because more roads lead to higher probability of collision.
+    If we want to know whether several neighborhood really form a cluster where collision are more frequent than others, we need to calculate the ratio of the number of collisions to the length of roads.
+    In other words, for a neighborhood, it's more reasonable to look at the number of collision with knowing the amount of roads.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+Road_data = st_read(paste0(data.dir, "/Edge of Road - WGS84/TOPO_EDGE_OF_ROAD_WGS84.shp"))
+```
+
+As the roads and highways are in the form of polygon, we can only calculate the area of road and highway, and **use the total area as** **their total length!**
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+Road_data_UTM <- st_transform(Road_data, crs = 32617)
+#Project to UTM zone for calculating the area more accurately
+utm17.area = Road_data_UTM %>% 
+  st_area(geometry) %>% set_units(km^2)
+Road_data$roadway_area = utm17.area
+```
+
+Then we use spatial join to distribute every road and highway into every neighbourhood based on their location.
+Finally, we calculate the sum of area of roads(km\^2) in every neighbourhood.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+neighborhood_roadway <- st_join(neighborhoods_data, Road_data, join = st_intersects)
+
+neighborhood_road_area_sum <- neighborhood_roadway %>% as_tibble() %>% 
+  group_by(Neighbourh) %>%  
+  summarize(total_area = sum(roadway_area, na.rm = TRUE))%>%
+  head(10)
+
+neighborhood_road_area_sum %>%
+  kable("html", caption = "") %>%
+  kable_styling(full_width = FALSE, bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+Here is the histogram of the sum of area of roads.
+We can see most neighbourhood has the area of roads under 1 km\^2.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+hist(neighborhood_road_area_sum$total_area)
+```
+
+### Dataset 3: 'Motor Vehicle collisions with Killed or Seriously Injured Persons'
+
+-   Multpoint shapefile.
+
+-   This dataset contains the details of every Motor Vehicle collisions from 2006 to 2023.
+    These details include (1)the vehicle type such as truck, city vehicle and motorcycle, (2)the type of injured people such as pedestrian and cyclist, (3) driver's condition such as age, manouever and action, (4)Environment and weather,(5)Type of site, such as pedestrian crossover and so on.
+    Every collision is caused by a specific reason or multiple reasons together.
+    In this project, I mainly focus on driver condition, road condition, and location, like said before.
+
+-   There are 18957 locations.
+    However, the location of infrastructure can changes with time, and more infrastructure are built every year.
+    Therefore, to be up-to-date, we only focus on the collision from 2020 to 2023, and there are 2725 collisions in total.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+collision_data = st_read(paste0(data.dir, "/Motor Vehicle Collisions with KSI Data - 4326/Motor Vehicle Collisions with KSI Data - 4326.shp"))
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+collision_data$time <- as.Date(collision_data$DATE3)
+collision_data <- collision_data %>%
+  filter(DATE3 >= as.Date("2020-01-01") & time <= as.Date("2023-12-31"))
+```
+
+Here is the leaflet map showing the collisions
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+leaflet(data = collision_data) %>%
+  addTiles() %>%  
+  
+  addCircleMarkers(data = subset(collision_data, REDLIGH42 == "Yes"),
+                   ~st_coordinates(collision_data)[,1], ~st_coordinates(collision_data)[,2],
+                   color = "red", radius = 3,
+                   popup = ~paste("collision_data ID:", INVTYPE17),
+                   group = "red light related: Yes") %>%
+  addCircleMarkers(data = subset(collision_data, ALCOHOL43 == "Yes"),
+                   ~st_coordinates(collision_data)[,1], ~st_coordinates(collision_data)[,2],
+                   color = "blue", radius = 3,
+                   popup = ~paste("collision_data ID:", INVTYPE17),
+                   group = "Alochol driver: Yes") %>%
+  
+  addCircleMarkers(data = subset(collision_data, SPEEDIN40 == "Yes"),
+                   ~st_coordinates(collision_data)[,1], ~st_coordinates(collision_data)[,2],
+                   color = "yellow", radius = 3,
+                   popup = ~paste("collision_data ID:", INVTYPE17),
+                   group = "Speeding driver: Yes") %>%  
+  
+  addCircleMarkers(data = subset(collision_data, AG_DRIV41 == "Yes"),
+                   ~st_coordinates(collision_data)[,1], ~st_coordinates(collision_data)[,2],
+                   color = "green", radius = 3,
+                   popup = ~paste("collision_data ID:", INVTYPE17),
+                   group = "Careless driver: Yes") %>%   
+  
+  addCircleMarkers(data = subset(collision_data, TRAFFCT11 == "Stop Sign"),
+                   ~st_coordinates(collision_data)[,1], ~st_coordinates(collision_data)[,2],
+                   color = "purple", radius = 3,
+                   popup = ~paste("collision_data ID:", INVTYPE17),
+                   group = "Stop Sign related: Yes") %>%  
+  
+  addCircleMarkers(data = subset(collision_data, TRAFFCT11 == "No Control"),
+                   ~st_coordinates(collision_data)[,1], ~st_coordinates(collision_data)[,2],
+                   color = "orange", radius = 3,
+                   popup = ~paste("collision_data ID:", INVTYPE17),
+                   group = "No control related: Yes") %>%  
+  
+  addCircleMarkers(data = subset(collision_data, LIGHT13 == "Dark"),
+                   ~st_coordinates(collision_data)[,1], ~st_coordinates(collision_data)[,2],
+                   color = "black", radius = 3,
+                   popup = ~paste("collision_data ID:", INVTYPE17),
+                   group = "Dark environment related: Yes") %>%    
+  addLayersControl(
+    overlayGroups = c("red light related: Yes","Alochol driver: Yes","Speeding driver: Yes","Careless driver: Yes", "Stop Sign related: Yes","No control related: Yes","Dark environment related: Yes"),
+    options = layersControlOptions(collapsed = FALSE)
+  )
+```
+
+Here is the table showing the proportion of each type of collision in the total collisions.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+p1= nrow(subset(collision_data, REDLIGH42 == "Yes")) / nrow(collision_data)
+p2= nrow(subset(collision_data, ALCOHOL43 == "Yes")) / nrow(collision_data)
+p3= nrow(subset(collision_data, SPEEDIN40 == "Yes")) / nrow(collision_data)
+p4= nrow(subset(collision_data, AG_DRIV41 == "Yes")) / nrow(collision_data)
+p5= nrow(subset(collision_data, TRAFFCT11 == "Stop Sign")) / nrow(collision_data)
+p6= nrow(subset(collision_data, TRAFFCT11 == "No Control")) / nrow(collision_data)
+p7= nrow(subset(collision_data, LIGHT13 == "Dark")) / nrow(collision_data)
+values <- c(p1, p2,p3,p4,p5,p6,p7)
+labels <- c("red light related: Yes", "Alochol driver: Yes","Speeding driver: Yes","Careless driver: Yes", "Stop Sign related: Yes","No control related: Yes","Dark environment related: Yes")
+
+table <- data.frame(Category = labels, Proportion = values)
+# Display the table
+print(table)
+```
+
+Here is the table showing the number of collisions in every neigbourhood.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+neighborhood_collision <- st_join(neighborhoods_data, collision_data, join = st_intersects)
+
+collision_in_each_neighbour = neighborhood_collision %>% as_tibble() %>% 
+  group_by(Neighbourh) %>%
+  summarise(collision_number=n())%>%
+  head(10)
+
+collision_in_each_neighbour %>%
+  kable("html", caption = "") %>%
+  kable_styling(full_width = FALSE, bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+Here is the histogram of the number of collision.
+We can see most neighbourhood has the number of collision under 20.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+hist(collision_in_each_neighbour$collision_number)
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE,results="hide"}
+mean(collision_in_each_neighbour$collision_number)
+median(collision_in_each_neighbour$collision_number)
+var(collision_in_each_neighbour$collision_number)
+```
+
+The mean, median, variance are 19, 14, 335 respectively.
+We can see the variance is very large, meaning high dispersion in data.
+
+### Dataset 4: 'Traffic Camera List'
+
+-   Multi-point shapefile.
+
+-   This dataset contains all the locations of traffic cameras.
+
+-   There are 497 locations.
+
+Here is a leaflet map showing the location of these traffic cameras
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+camera_data=st_read(paste0(data.dir, "/Traffic Camera List - 4326/Traffic Camera List - 4326.shp"))
+
+leaflet(data = camera_data) %>%
+  addTiles() %>%  
+  addCircleMarkers(~st_coordinates(camera_data)[,1], ~st_coordinates(camera_data)[,2],
+                   radius = 5, color = "red", fillOpacity = 0.7,
+                   popup = ~paste("ID:", MAINROAD))  %>%
+  addLegend("topright", colors = "red", labels = "Camera Locations",
+            title = "Legend", opacity = 0.7)
+```
+
+Then we calculate the number of traffic cameras for each neighborhood.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+neighborhood_camera <- st_join(neighborhoods_data, camera_data, join = st_intersects)
+
+camera_in_each_neighbour = neighborhood_camera %>% as_tibble() %>% 
+  group_by(Neighbourh) %>%
+  summarise(camera_number=n())%>%
+  head(10)
+
+camera_in_each_neighbour %>%
+  kable("html", caption = "") %>%
+  kable_styling(full_width = FALSE, bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+Here is the histogram of the number of cameras in each neighbourhood
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+hist(camera_in_each_neighbour$camera_number)
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE,results="hide"}
+mean(camera_in_each_neighbour$camera_number)
+median(camera_in_each_neighbour$camera_number)
+var(camera_in_each_neighbour$camera_number)
+```
+
+The mean, median, variance are 3.7, 2, 47 respectively.
+We can see the variance is very large, meaning high dispersion in data.
+
+### Dataset 5: 'Street Light Pole Location'
+
+-   Multi-point shapefile.
+
+-   This dataset contains all the locations of street light pole.
+
+-   There are 207274 locations.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+Pole_data = st_read(paste0(data.dir, "/topgraphic-mapping-poles-wgs84/TOPO_POLES_WGS84.shp"))
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+light_Pole_data <- Pole_data %>%
+  filter(subtype == 'Street Light Pole')
+```
+
+Then we calculate the number of street light poles for each neighborhood.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+neighborhood_light <- st_join(neighborhoods_data, light_Pole_data, join = st_intersects)
+
+light_in_each_neighbour = neighborhood_light %>% as_tibble() %>% 
+  group_by(Neighbourh) %>%
+  summarise(light_pole_number=n())%>%
+  head(10)
+
+light_in_each_neighbour %>%
+  kable("html", caption = "") %>%
+  kable_styling(full_width = FALSE, bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+Here is the histogram of the number of street lights in each neighbourhood
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+hist(light_in_each_neighbour$light_pole_number)
+```
+
+### Dataset 6: 'Traffic signal Pole Location'
+
+-   Multi-point shapefile.
+
+-   This dataset contains all the locations of Traffic signal pole.
+
+-   There are 9984 locations.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+Signal_Pole_data <- Pole_data %>%
+  filter(subtype == 'Traffic Signal Pole')
+```
+
+Then we calculate the number of traffic signal poles for each neighborhood.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+neighborhood_signal <- st_join(neighborhoods_data, Signal_Pole_data, join = st_intersects)
+
+signal_in_each_neighbour <- neighborhood_signal %>%
+  as_tibble() %>%
+  group_by(Neighbourh) %>%
+  summarise(signal_pole_number = n()) %>%
+  head(10)
+
+signal_in_each_neighbour %>%
+  kable("html", caption = "") %>%
+  kable_styling(full_width = FALSE, bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+Here is the histogram of the number of signal pole in each neighbourhood
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+hist(signal_in_each_neighbour$signal_pole_number)
+```
+
+### Dataset 7: 'Traffic calming implementation in each road'
+
+-   Multi-line-string shapefile.
+
+-   This dataset contains the number of different traffic calming implementations including speed cushion, speed bump and traffic island, in each road and highway in Toronto.
+    Traffic calming implementation is designed for slowing down traffic and improving road safety.
+
+-   There are 865 Multi-line-string.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+calming_data = st_read(paste0(data.dir, "/Traffic Calming Database (1)/Traffic Calming Database - 04.04.2023V2.shp"))
+calming_data <- st_transform(calming_data, crs = 4326)
+```
+
+Then we calculate the number of traffic calming implementations in each neighborhood.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+neighborhood_calming <- st_join(neighborhoods_data, calming_data, join = st_intersects)
+
+calming_in_each_neighbour <- summarize(
+  group_by(
+    as_tibble(neighborhood_calming),
+    Neighbourh
+  ),
+  total_speed_cushion = sum(spd_cush, na.rm = TRUE),
+  total_speed_hump = sum(spd_hump, na.rm = TRUE),
+  total_traffic_island = sum(traf_islan, na.rm = TRUE),
+  total_calming = sum(spd_cush, na.rm = TRUE) + sum(spd_hump, na.rm = TRUE) + sum(traf_islan, na.rm = TRUE)
+)
+calming_in_each_neighbour = head(calming_in_each_neighbour,10)
+
+calming_in_each_neighbour %>%
+  kable("html", caption = "") %>%
+  kable_styling(full_width = FALSE, bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+Here is the histogram of the number of traffic calming implementations in each neighbourhood
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+hist(calming_in_each_neighbour$total_calming)
+```
+
+Here is the pie chart showing the proportion of each type of implementations
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+values <- c(sum(calming_in_each_neighbour$total_speed_cushion),sum(calming_in_each_neighbour$total_speed_hump), sum(calming_in_each_neighbour$total_traffic_island))
+labels <- c("Speed cushion", "speed hump", "traffic island")
+
+# Basic pie chart
+pie(values, labels = labels, main = "Proportion of each type of implementations")
+
+```
+
+In total, it's important to notice that greater total length of roads lead to more space to install cameras, streetlight poles, signal poles and calming implementations.
+Hence, when assessing whether a neighborhood has sufficient traffic safety infrastructure, we should also consider the total road length.
+
+### Dataset 8: 'Red light camera Location'
+
+-   Multi-point shapefile.
+
+-   This dataset contains all the locations of red light camera.
+    The main purpose of red light camera is to reduce red-light running by automatically capture images of vehicles that enter an intersection after the traffic signal has turned red.
+    This camera can encourage drivers to be more cautious and to follow traffic signals when approaching intersections.
+
+-   There are 296 locations.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+redlight_camera_data=st_read(paste0(data.dir, "/Red Light Cameras Data - 4326/Red Light Cameras Data - 4326.shp"))
+```
+
+Then we calculate the number of red light camera for each neighborhood.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+neighborhood_redlight_camera <- st_join(neighborhoods_data, redlight_camera_data, join = st_intersects)
+
+redlight_camera_in_each_neighbour = neighborhood_redlight_camera %>% as_tibble() %>% 
+  group_by(Neighbourh) %>%
+  summarise(redlight_camera_number=n())%>%
+  head(10)
+
+redlight_camera_in_each_neighbour %>%
+  kable("html", caption = "") %>%
+  kable_styling(full_width = FALSE, bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+Here is the histogram of the number of red light cameras in each neighbourhood
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+hist(redlight_camera_in_each_neighbour$redlight_camera_number)
+```
+
+### Study domain:
+
+The study domain of all dataset is the City of Toronto.
+They all use WGS84 datum.
+
+# A plan for the type of methods
+
+1.  All dataset are transfomred to WGS84 datum.
+    Then, the dataset of roads, collisions, traffic camera, streetlight pole, traffic lights pole, and traffic calming implementations are spatially merged into the neighborhoods.
+
+2.  I will examine the evidence of global spatial autocorrelation in neighborhoods in Great Toronto Area for the number of motor vehicle collisions, by using Moran’s I and Geary’s c.
+    Then Local Moran’s I and the Getis-Ord G\* statistics are used to explore which specific area has a cluster of collisions.
+    The same procedure will be also repeated for every type of collisions of interest (road condition, driver condition and locations)
+
+3.  Weight matrix by Queen connectivity, kNN connectivity and inverse distance will be calculated and applied by row standardization.
+    Then, we will select the weight matrix with highest Moran’s I. Also, the value of Global Moran's I for different lags will be examined to check if the statistically significant spatial autocorrelation is mainly a local phenomenon or a broader scope.
+
+4.  To examine the direct and Intuitive effect of infrastructure, a 1km buffer is created around each infrastructure element.
+    Hence, we need to project every shapefile to UTM11 zone to have more accurate distance measurement.
+    For example, for every red light camera location, I will create a 1km buffer.
+    Then I will count the number of collisions within the buffer, and sum them up, and divide them by total length of roads in each neighborhood.
+    The neighborhood with the highest number indicates the area where the red light cameras do not play an effective role in preventing red-light collisions around them.
+
+5.  To be more statistically rigorous, Then the SAR and CAR models are built.
+
+    -   In general, we can model the relationship between the number of collision and other predictors such as the number of traffic signal pole.
+        Then, for example, the sign(+/-) and significance(p-value) of the regression coefficients can used to determine whether a predictor effectively help reduce the number of collisions.
+
+    -   Furthermore, we can be more specific.
+        We can examine the relationship between the a certain type of collision and a certain type of infrastructure element.
+        For example, we can build the autoregression model to assess the effect of the number of street light pole on the number of collisions in dark night , in order to see whether these poles really reduce the number of collision during night.
+        For another example, we can build the model to assess the spatial autocorrelation between the number of collisions caused by speeding/carelessness and the number of cameras
+
+# Data source
+
+<https://open.toronto.ca/dataset/topographic-mapping-edge-of-road/>
+
+<https://open.toronto.ca/dataset/motor-vehicle-collisions-involving-killed-or-seriously-injured-persons/>
+
+<https://open.toronto.ca/dataset/traffic-cameras/>
+
+<https://open.toronto.ca/dataset/traffic-calming-database/>
+
+<https://open.toronto.ca/dataset/topographic-mapping-poles/>
+
+<https://open.toronto.ca/dataset/red-light-cameras/>
