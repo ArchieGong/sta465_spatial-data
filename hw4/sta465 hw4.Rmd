@@ -1,0 +1,612 @@
+---
+title: "STA465 hw3"
+author: "Jiawei Gong"
+date: "11/5/2024"
+output:
+  html_document: default
+  pdf_document: default
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+#  {.tabset}
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Setup
+
+```{r}
+library(tidyverse)
+library(leaflet) 
+library(sf)
+library(units)
+library(spdep)
+library(spData) # for SIDS spatial data
+library(spatialreg) # for SAR and CAR
+library(spgwr) # for GWR
+library(spaMM) 
+```
+
+```{r}
+data.dir = gsub('/code', '/data', getwd())
+neighbourhood_stats <- read.csv(paste0(data.dir, "/neighbourhood-stats-1.csv"))
+
+neighborhoods= st_read(paste0(data.dir, '/Toronto_Neighbourhoods/Toronto_Neighbourhoods.shp'))
+neighborhoods_wgs84 <- st_transform(neighborhoods, crs = 4326)
+```
+
+```{r}
+#spatial join of crimes to neighborhoods
+merged_neighborhoods <- neighborhoods_wgs84 %>%
+  left_join(neighbourhood_stats, by = "Neighbourh")
+merged_neighborhoods$ttc_rate = merged_neighborhoods$commute_ttc/merged_neighborhoods$population_2023
+merged_neighborhoods$post_grad_prop = merged_neighborhoods$postsecondary_grad/merged_neighborhoods$population_2023
+```
+
+## Q1
+
+```{r}
+#6NN weight matrix
+nc_centroids <- st_centroid(merged_neighborhoods)
+coords <- st_coordinates(nc_centroids)
+sids_kn6<-knn2nb(knearneigh(coords, k=6))
+sids_kn6_w<-nb2listw(sids_kn6, style="W")
+
+#Queen weight matrix
+sids_nb_queen<-poly2nb(merged_neighborhoods, queen=TRUE)
+sids_queen_w<-nb2listw(sids_nb_queen, style="W")
+
+```
+
+Queen lag
+
+```{r}
+#Queen lag
+corrneigh_queen<-sp.correlogram(sids_nb_queen, merged_neighborhoods$median_family_income, order=10, method="I", style="W", randomisation=T, zero.policy=TRUE)
+print(corrneigh_queen)
+plot(corrneigh_queen,main="Moran's I for proportion of TTC communters, Correlogram, Queen Lags")
+```
+
+6NN lag
+
+```{r}
+corrneigh_6NN<-sp.correlogram(sids_kn6, merged_neighborhoods$median_family_income, order=10, method="I", style="W", randomisation=T, zero.policy=TRUE)
+print(corrneigh_6NN)
+plot(corrneigh_6NN,main="Moran's I for proportion of TTC communters, Correlogram, 6NN Lags")
+```
+
+We will choose Queen weight matrix, because it shows a larger Moran's I,
+meaning it can capture the spatial autocorrelation better. Also, Queen
+matrix highlights the spatial clustering of median family income, making
+it a suitable choice for our spatial analysis.
+
+## Q2 {.tabset}
+
+### OLS
+
+median_age
+
+```{r}
+mod_lm<-lm(median_family_income ~ post_grad_prop + unemploy_rate + Total_Popu + median_age + ttc_rate, data=merged_neighborhoods)
+summary(mod_lm)
+```
+
+1.  **What:**This linear regression model does not account for spatial
+    dependency. This model aims to describes the linear relationship
+    between predictors and the response variable.
+
+2.  **How:** The coefficients are estimated by minimizing the sum of the
+    squared errors(the differences between the observed and predicted
+    values). Also, the adjusted R-squared is 0.6582. Residual standard
+    error is 20380, which measures the difference between observed and
+    predicted values.
+
+3.  **Description of parameters:**
+
+    -   Intercept (1.783e+05): median family income is 1.783e+05 when
+        all the predictors are zero
+
+    -   unemploy_rate (-6.180e+03): For every 1-unit increase in the
+        unemployment rate, median family income is estimated to decrease
+        by 6.180e+03. It's statistically significant (p-value \< 0.05)
+
+    -   Total_Popu (-5.439e-01): For every 1-unit increase in the
+        unemployment rate, median family income is estimated to decrease
+        by 5.439e-01. It's statistically significant (p-value \< 0.05)
+
+    -   ttc_rate (-3.806e+05): For every 1-unit increase in the
+        unemployment rate, median family income is estimated to decrease
+        by 3.806e+05. It's statistically significant (p-value \< 0.05)
+
+    -   post_grad_prop and median_age are not statistically significant
+        predictors (p-value \> 0.05). Hence, we drop them out in the
+        following models.
+
+```{r}
+merged_neighborhoods$lm_resid<-residuals(mod_lm)
+# Check Moran's I for spatial autocorrelation in residuals (OLS model)
+moran.test(merged_neighborhoods$lm_resid, sids_queen_w)
+```
+
+4.  **Test residual**
+
+We can see Moran's I is positive(0.365375300), and statistically
+significant(p_value \< 0.05). This suggests spatial autocorrelation is
+present in the residuals, which means the OLS model does NOT fully
+capture the spatial structure of the data. Also, the spatial
+autocorrelation in the residuals can lead to biased estimates.
+
+5.  **Map the residual**
+
+```{r}
+ggplot(merged_neighborhoods) + geom_sf(aes(fill = lm_resid))
+```
+
+### SAR Spatial Lag
+
+```{r}
+sar_lag_model <- lagsarlm(median_family_income ~  unemploy_rate + Total_Popu + ttc_rate, data=merged_neighborhoods, listw=sids_queen_w)
+summary(sar_lag_model)
+```
+
+1.  **what:** The SAR Lag Model is fitted with the addition of a
+    spatially lagged dependent variable to capture the spatial
+    autocorrelation. SAR Lag Model only applies spatial weights to y. In
+    other words, the errors is i.i.d
+
+2.  **How**:
+
+    1.  $Y = X\beta + \rho W Y + \epsilon$, W is the weights matrix,
+        $\rho$ is the spatial autoregressive parameter, $\beta$ is the
+        regression coefficients.
+
+    2.  The goal is to maximize the likelihood:
+        $L(\rho, \beta, \sigma^2 | Y, X) = -\frac{n}{2} \log(2 \pi \sigma^2) - \frac{1}{2 \sigma^2} \epsilon' \epsilon + \log |I - \rho W|$
+
+    3.  $\beta$,$\rho$,$\sigma$ are optimized by Newton-Raphson
+
+    4.  AIC is 3141.1, lower than OLS. A lower AIC indicates a better
+        model fit.
+
+3.  **Description of parameters:**
+
+    -   Intercept (1.5783e+05): median family income is 1.5783e+05 when
+        the predictors are zero
+
+    -   Total_Popu (-4.1831e-01): It's NOT statistically significant
+        (p-value \> 0.05), after accounting for spatial effects
+
+    -   unemploy_rate (-4.7979e+03): It's statistically significant
+        (p-value \< 0.05), after accounting for spatial effects
+
+    -   ttc_rate (-4.0266e+05): It's statistically significant (p-value
+        \< 0.05), after accounting for spatial effects
+
+    -   The spatial parameter $\rho$ is 0.51351, and is statistically
+        significant (p-value \< 0.005). This positive value indicates
+        that neighborhoods with high/low median incomes are likely to be
+        near other neighborhoods with high/low median incomes.
+
+    -   The associated likelihood ratio test is 46.171 and statistically
+        significant (p-value \< 0.05). This shows a higher likelihood
+        for SAR Lag Model. This indicates the median income is fitted
+        better by SAR Lag Model than the OLS model, because of the
+        addition of the spatial autocorrelation.
+
+4.  **Test residual**
+
+```{r}
+merged_neighborhoods$sar_lag_resid<-residuals(sar_lag_model)
+moran.test(merged_neighborhoods$sar_lag_resid, sids_queen_w)
+```
+
+We can see Moran's I is positive(0.179115679), and statistically
+significant(p_value \< 0.05). This suggests spatial autocorrelation is
+present in the residuals, which means the SAR Spatial Lag model does NOT
+fully capture the spatial structure of the data. However, the clustering
+of similar residual by SAR Lag mode is much less than that by OLS model.
+Hence, SAR Lag Model has effectively reduced spatial autocorrelation in
+the residuals.
+
+5.  **Map the residual**
+
+```{r}
+ggplot(merged_neighborhoods) + geom_sf(aes(fill = sar_lag_resid))
+```
+
+### SAR Spatial Error
+
+```{r}
+mod_sar_error <- spautolm(median_family_income ~ unemploy_rate + Total_Popu + ttc_rate, data=merged_neighborhoods, listw=sids_queen_w)
+summary(mod_sar_error)
+```
+
+1.  **What:** $Y = X\beta + \epsilon$, where
+    $\epsilon = \lambda W \epsilon + \nu$. $\lambda$ is the spatial
+    autoregressive term for the errors, W is the spatial weight matrix,
+    and ν is iid errors
+
+2.  **How**:
+
+    -   $Y \sim MVN(X\beta, \Sigma_{\epsilon})$, where
+        $\Sigma_{\epsilon} = \sigma^2 (I - \lambda W)^{-1} (I - \lambda W)^{-T}$.
+
+    -   The goal is to maximize the likelihood:
+        $L(\lambda, \beta, \sigma^2 | Y, X) = -\frac{n}{2} \log(2 \pi \sigma^2) - \frac{1}{2 \sigma^2} (Y - X \beta)'(Y - X \beta) + \log |I - \lambda W|$
+
+    -   $\beta$,$\rho$,$\sigma$ are optimized by Newton-Raphson
+
+    -   AIC is 3135.9, lower than OLS and SAR Lag. A lower AIC indicates
+        a better model fit.
+
+3.  **Description of parameters**
+
+    -   Intercept (2.2543e+05): median family income is 2.2543e+05, when
+        the predictors are zero
+
+    -   unemploy_rate (-5.2533e+03): It's statistically significant
+        (p-value \< 0.05), after accounting for spatial effects
+
+    -   Total_Popu (-2.8080e-01): It's NOT statistically significant
+        (p-value \> 0.05), after accounting for spatial effects
+
+    -   ttc_rate (-4.8373e+05): It's statistically significant (p-value
+        \< 0.05), after accounting for spatial effects
+
+    -   The spatial parameter $\lambda$ is 0.76599, and is statistically
+        significant (p-value \< 0.005). This suggests there are
+        unobserved spatial factors that are influencing median family
+        income across neighborhoods.
+
+    -   The associated likelihood ratio test is 51.401 and statistically
+        significant (p-value \< 0.05). This shows a higher likelihood
+        for SAR Error Model. This indicates the median income is fitted
+        better by SAR Error Model than the OLS model, because of the
+        addition of the error term that accounts for spatial
+        autocorrelation.
+
+4.  **Test residual**
+
+```{r}
+merged_neighborhoods$sar_error_resid<-residuals(mod_sar_error)
+moran.test(merged_neighborhoods$sar_error_resid, listw=sids_queen_w)
+```
+
+We can see Moran's I is positive(0.065014886), and NOT statistically
+significant(p_value \> 0.05). This suggests spatial autocorrelation is
+NOT present in the residuals, which means the SAR Spatial Error model
+does fully capture the spatial structure of the data. In other words, it
+captures both the effects of the predictors and the spatially structured
+unobserved factors that influence median family income across
+neighborhoods.
+
+5.  **Map the residual**
+
+```{r}
+ggplot(merged_neighborhoods) + geom_sf(aes(fill = sar_error_resid))
+```
+
+### SAR Spatial Lag-Error
+
+```{r}
+mod_sar_error_lag <- sacsarlm(median_family_income ~ unemploy_rate + Total_Popu + ttc_rate, data=merged_neighborhoods, listw=sids_queen_w)
+summary(mod_sar_error_lag)
+```
+
+1.  **What:** $Y = X\beta + \epsilon$. The spatial autocorrelation in
+    both $Y$,$\epsilon$ is accounted. we estimate both $\rho$ and
+    $\lambda$.
+
+2.  **How**:
+
+    -   The goal is to maximize the likelihood:
+        $L(\rho, \lambda, \beta, \sigma^2 | Y, X) = -\frac{n}{2} \log(2 \pi \sigma^2) - \frac{1}{2 \sigma^2} \epsilon' \epsilon + \log |I - \rho W| + \log |I - \lambda W|$
+
+    -   $\beta$,$\rho$,$\sigma$ are optimized by Newton-Raphson
+
+    -   AIC is 3127.8, lower than OLS, SAR Lag and SAR Error. A lower
+        AIC indicates a better model fit.
+
+3.  **Description of parameters**
+
+    -   Intercept (1.8488e+05): median family income is 1.8488e+05, when
+        all the predictors are zero
+
+    -   unemploy_rate (-5.3155e+03): It's statistically significant
+        (p-value \< 0.05), after accounting for spatial effects
+
+    -   Total_Popu (-3.3095e-01): It's statistically significant
+        (p-value \< 0.05), after accounting for spatial effects
+
+    -   ttc_rate (-4.7106e+05): It's statistically significant (p-value
+        \< 0.05), after accounting for spatial effects
+
+    -   The spatial lag parameter $\rho$ is 0.36292, and is
+        statistically significant (p-value \< 0.005). This positive
+        value indicates that neighborhoods with high/low median incomes
+        are likely to be near other neighborhoods with high/low median
+        incomes.
+
+    -   The spatial error parameter $\lambda$ is 0.53746, and is
+        statistically significant (p-value \< 0.005). This suggests that
+        there is spatial autocorrelation in the residuals. And there are
+        unobserved spatial factors that are influencing median family
+        income across neighborhoods.
+
+    -   The associated likelihood ratio test is 61.493 and statistically
+        significant (p-value \< 0.05). This shows a higher likelihood
+        for SAR Lag-Error Model. This indicates the median income is
+        fitted better by SAR Lag-Error Model than the OLS model, because
+        it accounts for spatial autocorrelation both in the dependent
+        variable and unobserved factors.
+
+4.  **Test residual**
+
+```{r}
+merged_neighborhoods$sar_error_lag_resid<-residuals(mod_sar_error_lag)
+moran.test(merged_neighborhoods$sar_error_lag_resid, listw=sids_queen_w)
+```
+
+We can see Moran's I is positive(0.028581170), and NOT statistically
+significant(p_value \> 0.05). This suggests spatial autocorrelation is
+NOT present in the residuals, which means the SAR Lag-Error model does
+fully capture the spatial structure of the data. In other words, it
+captures spatial autocorrelation in both the dependent variable and the
+unobserved factors
+
+5.  **Map the residual**
+
+```{r}
+ggplot(merged_neighborhoods) + geom_sf(aes(fill = sar_error_lag_resid))
+```
+
+### CAR
+
+```{r}
+#Queen weight matrix --- binary
+sids_nb_queen<-poly2nb(merged_neighborhoods, queen=TRUE)
+sids_queen_w_B<-nb2listw(sids_nb_queen, style="B")
+```
+
+```{r}
+car_model <- spautolm(median_family_income ~ unemploy_rate + Total_Popu + ttc_rate, data=merged_neighborhoods, listw=sids_queen_w_B, family="CAR")
+summary(car_model)
+```
+
+1.  **What:**
+    $Y_i | Y_{-i} \sim N \left( \sum_{j \in \mathcal{N}_i} \beta_{ij} Y_j, \sigma_i^2 \right)$.
+    it assumes that the state of a particular area is influenced only by
+    its neighbors and not neighbors of neighbor. It assumes Markov
+    random field property holds.
+
+2.  **How**:
+
+    -   Each observation Y(si) is conditional on the values of all other
+        observations, $p[Y(s_i)\|Y_{−i}]$
+
+    -   $\beta$,$\rho$,$\sigma$ are optimized by MLE and Newton-Raphson
+
+    -   AIC is 3146.1, lower than OLS. A lower AIC indicates a better
+        model fit.
+
+3.  **Description of parameters**
+
+    -   Intercept (2.2537e+05): median family income is 2.2537e+05, when
+        all the predictors are zero
+
+    -   unemploy_rate (-5.4707e+03): It's statistically significant
+        (p-value \< 0.05), after accounting for spatial effects
+
+    -   Total_Popu (-3.7846e-01): It's NOT statistically significant
+        (p-value \> 0.05), after accounting for spatial effects
+
+    -   ttc_rate (-4.7421e+05): It's statistically significant (p-value
+        \< 0.05), after accounting for spatial effects
+
+    -   The spatial error parameter $\lambda$ is 0.1468, and is
+        statistically significant (p-value \< 0.005). This suggests that
+        there is spatial autocorrelation in the residuals. And there are
+        unobserved spatial factors that are influencing median family
+        income across neighborhoods.
+
+    -   The associated likelihood ratio test is 41.143 and statistically
+        significant (p-value \< 0.05). This shows a higher likelihood
+        for CAR Model. This indicates the median income is fitted better
+        by CAR Model than the OLS model, because it accounts for spatial
+        autocorrelation in the unobserved factors.
+
+4.  **Test residual**
+
+```{r}
+merged_neighborhoods$car_resid<-residuals(car_model)
+
+moran.test(merged_neighborhoods$car_resid, sids_queen_w)
+```
+
+We can see Moran's I is positive(0.024863018), and NOT statistically
+significant(p_value \> 0.05). This suggests spatial autocorrelation is
+NOT present in the residuals, which means the CAR model does fully
+capture the spatial structure of the data. In other words, there is no
+significant spatial autocorrelation in the residuals.
+
+5.  **Map the residual**
+
+```{r}
+ggplot(merged_neighborhoods) + geom_sf(aes(fill = car_resid))
+```
+
+## Q3
+
+We do not need to apply log transformation on the predictors
+
+```{r}
+hist(merged_neighborhoods$unemploy_rate)
+```
+
+```{r}
+hist(merged_neighborhoods$Total_Popu)
+```
+
+```{r}
+hist(merged_neighborhoods$ttc_rate)
+```
+
+### Queen neighborhood matrix with a CAR random effect
+
+```{r}
+merged_neighborhoods_drop <- merged_neighborhoods %>% st_drop_geometry()
+
+spatial_corr <- as.matrix(nb2mat(sids_nb_queen, style = "B", zero.policy = TRUE))
+
+rownames(spatial_corr) <- colnames(spatial_corr) <- merged_neighborhoods_drop$Neighbourh
+```
+
+```{r}
+library(spaMM)
+# Fit the model with a CAR random effect using the adjacency matrix
+mixed_model_car <- fitme(
+  median_family_income ~ unemploy_rate + Total_Popu + ttc_rate + adjacency(1 | Neighbourh),
+  data = merged_neighborhoods_drop,
+  family = gaussian(),
+  adjMatrix = spatial_corr  
+)
+summary(mixed_model_car)
+```
+
+1.  **What:** The mixed effect model is $Y = X \beta + Z e + \epsilon$,
+    where $e$\~$N(0, \Sigma_e)$ is the random effect, and Z accounts for
+    the structure in the random effects.
+
+2.  **How:**
+
+    -   This model assume Each neighborhood(areal unit) has a random
+        effect, and these effects are spatially correlated according to
+        the Queen weight matrix
+    -   The log-Likelihood value(-1567.073) is lower than SAR Lag-Error
+        model (-1556.896). The higher the values (closer to zero) are,
+        the better the model fit the data. So this is a worse fit than
+        SAR Lag-Error.
+
+3.  **Description of parameters:**
+
+    -   Intercept (2.254e+05): median family income is 2.254e+05, when
+        both post_grad_prop and unemploy_rate are zero
+
+    -   post_grad_prop (-5.471e+03): It's statistically significant
+        (t-value \< -1.96)
+
+    -   unemploy_rate (-3.785e-01): It's statistically significant
+        (t-value \< -1.96)
+
+    -   unemploy_rate (-4.742e+05): It's statistically significant
+        (t-value \< -1.96)
+
+    -   The spatial parameter $\rho$ is 0.1467969 A positive value
+        positive spatial autocorrelation, meaning that similar values in
+        median family income are clustered togther.
+
+    -   The residual variance(45882.8) is high. This suggests that there
+        is still unexplained variability in the response after
+        accounting for the fixed and random effects.
+
+4.  **Test residuals:**
+
+```{r}
+merged_neighborhoods$mixed_model_car_resid<-residuals(mixed_model_car)
+moran.test(merged_neighborhoods$mixed_model_car_resid, listw=sids_queen_w)
+```
+
+We can see Moran's I is negative(0.024897544), and NOT statistically
+significant(p_value \> 0.05). This suggests spatial autocorrelation is
+NOT present in the residuals, which means the this mixed effect model
+does fully capture the spatial structure of the data.
+
+5.  **Map the residuals:**
+
+```{r}
+ggplot(merged_neighborhoods) + geom_sf(aes(fill = mixed_model_car_resid))
+```
+
+### Matern adjacency with a neighborhood random effect
+
+```{r}
+# Fit the model with a Matern random effect based on geographical coordinates
+centroids <- st_centroid(merged_neighborhoods)
+coords <- st_coordinates(centroids)
+merged_neighborhoods_drop$lon <- coords[, 1]
+merged_neighborhoods_drop$lat <- coords[, 2]
+
+mixed_model_matern <- fitme(
+  median_family_income ~ unemploy_rate + Total_Popu + ttc_rate + Matern(1 | lon + lat),
+  data = merged_neighborhoods_drop,
+  family = gaussian()
+)
+```
+
+```{r}
+summary(mixed_model_matern)
+```
+
+1.  **What**: This mixed effect model have the fixed effects of
+    unemploy_rate, Total_Popu, and ttc_rate. The random effect is a
+    spatially structured effect using the Matern covariance function on
+    longitude and latitude.
+
+2.  **How**
+
+    -   Each neighbour will have a random effect, and the Matern
+        correlation will account for spatial distances for each
+        neighbour.
+    -   The log-Likelihood value(-1571.983) is lower than SAR Lag-Error
+        model (-1556.896). The higher the values (closer to zero) are,
+        the better the model fit the data. So this is a worse fit than
+        SAR Lag-Error.
+
+3.  **Description of data**
+
+    -   Intercept (2.376e+05): median family income is 2.376e+05, when
+        both post_grad_prop and unemploy_rate are zero
+
+    -   post_grad_prop (-5.649e+03): It's statistically significant
+        (t-value \< -1.96)
+
+    -   unemploy_rate (-4.942e-01): It's statistically significant
+        (t-value \< -1.96)
+
+    -   unemploy_rate (-5.192e+05): It's statistically significant
+        (t-value \< -1.96)
+
+    -   the smoothness parameter, nu, is 0.6907037. This parameter
+        controls the smoothness of the spatial correlation. A value
+        close to 1 suggests a relatively smooth spatial variation in the
+        random effects.
+
+    -   The spatial parameter $\rho$ is 60.9986990. This implies that
+        neighborhoods within this distance range have correlated values
+        of median income. In other words, a larger $\rho$ indicates that
+        observations far apart still exhibit some spatial correlation.
+
+    -   The residual variance(30040400) is very high. This suggests that
+        there is still unexplained variability in the response after
+        accounting for the fixed and random effects.
+
+4.  **Test residuals**
+
+```{r}
+merged_neighborhoods$mixed_model_matern_resid<-residuals(mixed_model_matern)
+moran.test(merged_neighborhoods$mixed_model_matern_resid, listw=sids_queen_w)
+```
+
+We can see Moran's I is negative(0.010471305), and NOT statistically
+significant(p_value \> 0.05). This suggests spatial autocorrelation is
+NOT present in the residuals, which means the this mixed effect model
+does fully capture the spatial structure of the data.
+
+5.  **Map the residual**
+
+```{r}
+ggplot(merged_neighborhoods) + geom_sf(aes(fill = mixed_model_matern_resid))
+```
