@@ -1,0 +1,465 @@
+---
+title: "STA465 hw3"
+author: "Jiawei Gong"
+date: "11/5/2024"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+#  {.tabset}
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Setup
+
+```{r}
+library(tidyverse)
+library(leaflet) 
+library(sf) 
+library(units) 
+library(spdep) # areal analysis
+library(spData) 
+library(dplyr)
+library(ggplot2)
+library(leaflet) 
+library(htmlwidgets) 
+library(sf) 
+library(ggmap) 
+library(units)
+library(dplyr)
+```
+
+## Q1
+
+```{r}
+data.dir = gsub('/code', '/data', getwd())
+neighbourhood_stats <- read.csv(paste0(data.dir, "/neighbourhood-stats-1.csv"))
+#neighbourhood_stats = st_as_sf(neighbourhood_stats, crs=4326)
+#crime_sites_wgs84 <- st_transform(crime_sites, crs = 4326)
+
+neighborhoods= st_read(paste0(data.dir, '/Toronto_Neighbourhoods/Toronto_Neighbourhoods.shp'))
+neighborhoods_wgs84 <- st_transform(neighborhoods, crs = 4326)
+```
+
+```{r}
+#spatial join of crimes to neighborhoods
+merged_neighborhoods <- neighborhoods_wgs84 %>%
+  left_join(neighbourhood_stats, by = "Neighbourh")
+```
+
+```{r}
+
+summary(merged_neighborhoods$unemploy_rate)
+summary(merged_neighborhoods$postsecondary_grad)
+sd(merged_neighborhoods$unemploy_rate)
+sd(merged_neighborhoods$postsecondary_grad)
+
+tibble(
+  variable = c('unemploy_rate','postsecondary_grad'),
+  mean = c(mean(merged_neighborhoods$unemploy_rate),mean(merged_neighborhoods$postsecondary_grad)),
+  variance  = c(var(merged_neighborhoods$unemploy_rate),var(merged_neighborhoods$postsecondary_grad))
+)
+
+# Plot distributions of the variables
+ggplot(merged_neighborhoods, aes(x = unemploy_rate)) + 
+  geom_histogram(binwidth = 1, fill = "blue", alpha = 0.6) +
+  labs(title = "Distribution of unemploy_rate")
+
+ggplot(merged_neighborhoods, aes(x = postsecondary_grad)) + 
+  geom_histogram(binwidth = 1000, fill = "red", alpha = 0.6) +
+  labs(title = "Distribution of postsecondary_grad")
+
+cor(as.numeric(merged_neighborhoods$unemploy_rate), as.numeric(merged_neighborhoods$postsecondary_grad), use = "complete.obs")
+
+
+```
+
+-   The distribution of unemploy_rate and postsecondary_grad both follow noraml distribution. But it is clear that distribution of postsecondary_grad is very right-skewed.
+
+-   The mean of unemploy_rate is 13.92143 and variance is 2.806385. The mean of postsecondary_grad is 9284.77143 and variance is 25377436.
+
+-   we can see there is a negative correlation (-0.2079118) between the unemploy rate and number with post-secondary education This means unemploy rat will decrease as more people have post-secondary education. This is right according to our common sense.
+
+```{r}
+#pop.pal.to = colorNumeric(c('beige','dodgerblue','dodgerblue'),
+#                       domain=neighb$Total_Popu/neighb$Total_Area)
+#leaflet(neighb) %>% 
+#  addProviderTiles('CartoDB.Positron') %>%
+#  addPolygons(fillColor=~pop.pal.to(Total_Popu/Total_Area), weight=.5, fillOpacity=.9,
+#              label=~paste0(Neighbourh, ': ', Total_Popu/Total_Area))
+
+pal_var1 <- colorQuantile("YlGnBu", merged_neighborhoods$unemploy_rate, n = 5)
+pal_var2 <- colorQuantile("YlOrRd", merged_neighborhoods$postsecondary_grad, n = 5)
+
+leaflet(data = merged_neighborhoods) %>%
+  addProviderTiles("CartoDB.Positron") %>%
+  addPolygons(fillColor = ~pal_var1(unemploy_rate), color = "#BDBDC3", weight = 1,
+              fillOpacity = 0.7, smoothFactor = 0.5,
+              label = ~paste0(Neighbourh, ", unemploy_rate: ", unemploy_rate)) %>%
+  addLegend(
+    pal = pal_var1,
+    values = ~unemploy_rate,
+    title = "Unemployment Rate Quintiles",
+    position = "bottomright"
+  )
+
+leaflet(data = merged_neighborhoods) %>%
+  addProviderTiles("CartoDB.Positron") %>%
+  addPolygons(fillColor = ~pal_var2(postsecondary_grad), color = "#BDBDC3", weight = 1,
+              fillOpacity = 0.7, smoothFactor = 0.5,
+              label = ~paste0(Neighbourh, ", postsecondary_grad: ", postsecondary_grad)) %>%
+  addLegend(
+    pal = pal_var2,
+    values = ~postsecondary_grad,
+    title = "Postsecondary Grad Rate Quintiles",
+    position = "bottomright"
+  )
+```
+
+From the map of unemployment rate, the middle part of Toronto, such as Lawrence Park South, has lower unemployment rate. However, the west and east part of Toronto seems to have higher unemployment rate. Additionally, waterfront community has a very low unemployment rate.
+
+From the map of postsecondary graduation, the middle part of Toronto, has less people with postsecondary graduation. However, the west and east part of Toronto seems to have more people with postsecondary graduation. Additionally, waterfront community has more people with postsecondary graduation.
+
+This trend and cluster also align with the fact that the correlation between unemployment rate and number with postsecondary graduation is negative.
+
+## Q2 {.tabset}
+
+### Queen
+
+```{r}
+sids_nb_queen<-poly2nb(merged_neighborhoods, queen=TRUE)
+plot(st_geometry(merged_neighborhoods), border = "lightgray", main = "Queen Contiguity Neighbors")
+plot(sids_nb_queen, st_coordinates(st_centroid(st_geometry(merged_neighborhoods))), add = TRUE, col = "blue", lwd = 1)
+
+summary(card(sids_nb_queen))
+```
+
+-   By summary, number of connection by 'Queen' is at least 3, and the number of connection by 'Queen' is at most 11.
+
+-   By 'Queen' connectivity: neighbourhoods that share a border or vertex are connected This method captures the geographical adjacency.
+
+-   In the plot, we can see the connectivity is very dense near the lake (Waterfront community), meaning boundaries of neighbourhoods near the lake are smaller and interconnected.
+
+### 6-NN
+
+```{r}
+# Compute centroids of the counties
+nc_centroids <- st_centroid(merged_neighborhoods)
+coords <- st_coordinates(nc_centroids)
+sids_kn6<-knn2nb(knearneigh(coords, k=6))
+
+plot(st_geometry(merged_neighborhoods), border = "lightgray", main="6-NN")
+plot(sids_kn6,st_coordinates(st_centroid(st_geometry(merged_neighborhoods))),add=TRUE, col="blue", lwd=1)
+
+summary(card(sids_kn6))
+```
+
+-   By summary, number of connection by '6NN' is 6 for all neighbours.
+
+-   By '6NN' connectivity: each neighbourhood has 6 connection based on top 6 nearest distance.Even if neighbourhoods don't touch, they still can be connceted. This method can capture the local proximity better.
+
+-   In the plot, similarly, we can see the connectivity is very dense near the lake (Waterfront community)
+
+### Inverse distance based adjacency matrix
+
+```{r}
+nc_centroids <- st_centroid(merged_neighborhoods)
+coords <- st_coordinates(nc_centroids)
+sids_kn1<-knn2nb(knearneigh(coords, k=1))
+ndist<-unlist(nbdists(sids_kn1, coords))
+summary(ndist)
+
+plot(st_geometry(merged_neighborhoods), border = "lightgray", main="1NN neighbours")
+plot(sids_kn1, st_coordinates(st_centroid(st_geometry(merged_neighborhoods))), add=T,col="blue",lwd=1)
+
+summary(card(sids_kn1))
+```
+-   By summary, number of connection by '1NN' is 1 for all neighbourhoods.
+
+-   By '1NN' connectivity: each neighbourhood has 1 connection based on one nearest distance.Even if neighbourhoods don't touch, they still can be connceted. This method can capture the local proximity better.
+
+### Compare
+
+```{r}
+#Queen v.s. 6NN
+diffs1<-diffnb(sids_nb_queen, sids_kn6)
+plot(st_geometry(merged_neighborhoods), border = "lightgray", main="Difference between Queen, 6NN")
+plot(diffs1,st_coordinates(st_centroid(st_geometry(merged_neighborhoods))),add=TRUE, col="red", lwd=1)
+```
+We can see: the major differences between lists of neighbours is around the waterfront community. In the central part of Toronto, the Queen connectivity and 6NN connectivity are more similar, because these neighborhoods are very small, and share many borders.
+
+The reason: Queen connectivity is more sensitive to the exact geometry of the areal units. If areal units don’t share borders, they are not connected. In contrast, 6NN is less sensitive to geometry. 6NN relies more on distance.
+
+```{r}
+#Queen v.s. Inverse distance
+diffs2<-diffnb(sids_nb_queen, sids_kn1)
+plot(st_geometry(merged_neighborhoods), border = "lightgray", main="Difference between Queen, 1NN")
+plot(diffs2,st_coordinates(st_centroid(st_geometry(merged_neighborhoods))),add=TRUE, col="red", lwd=1)
+```
+We can see: the major differences between lists of neighbours is still around the waterfront community.
+
+The reason: Queen connectivity and 1NN connectivity both specifically focus on the adjacent areal units rather than further ones. However, Queen connectivity rely on borders, while 1NN connectivity rely on distance.
+
+```{r}
+#Inverse distance v.s. 6NN
+diffs3<-diffnb(sids_kn1, sids_kn6)
+plot(st_geometry(merged_neighborhoods), border = "lightgray", main="Difference between 1NN, 6NN")
+plot(diffs3,st_coordinates(st_centroid(st_geometry(merged_neighborhoods))),add=TRUE, col="red", lwd=1)
+```
+
+We can see: the major differences between lists of neighbors is still around the waterfront community. These additional red lines represent the 2nd to 6th nearest neighbors for each neighborhood.
+
+### matrix matrics
+
+```{r}
+#Queen
+sids_queen_w<-nb2listw(sids_nb_queen, style="W")
+sids_queen_w
+summary(unlist(sids_queen_w$weights))
+```
+
+'Max.=0.33333' means that the number of connection by 'Queen' is at least 3. 'Min.=0.09091' means that the number of connection by 'Queen' is at most 11
+
+```{r}
+#6-NN
+sids_kn6_w<-nb2listw(sids_kn6, style="W")
+sids_kn6_w
+summary(unlist(sids_kn6_w$weights))
+```
+
+all the weights is 0.1667, because every areal unit has 6 connections by 6-NN method.
+
+```{r}
+# inverse distance weighted weights
+
+dists<-nbdists(sids_kn1, coords)
+# inverse distance weighted weights
+idw <- lapply(dists, function(x) 1/(x^2))
+sids_idw_dist_w <- nb2listw(sids_kn1, glist = idw, style = "W")
+summary(unlist(sids_idw_dist_w$weights))
+```
+
+Inverse Distance would weight neighboring observations inversely based on physical distance. This method give more weights to nearby neighborhoods and less weights to distant ones.
+
+In this case, if we use 1NN and row standardization, the weights is 1 for one neighour for all neighborhoods. 
+
+## Q3 {.tabset}
+
+### Queen
+
+```{r}
+
+moranSIDS_queen<-moran.test(merged_neighborhoods$commute_ttc/merged_neighborhoods$population_2023,sids_queen_w, randomisation = F, alternative = "two.sided")
+moranSIDS_queen
+```
+
+-   Summary: The results indicate a statistically significant positive spatial autocorrelation for proportion of TTC commuters, when using the row standardized weight matrix by Queen connectivity.
+
+-   Interpret: The p-value (3.031e-15) is less than 0.05, meaning the result is statistically significant. The Moran I statistic is postivie (0.3782), meaning neighboring regions have similar values. In other words, neighborhoods with similar commuting patterns (either high or low reliance on TTC) are more likely to be located near each other.
+
+### 6NN
+
+```{r}
+moranSIDS_6NN<-moran.test(merged_neighborhoods$commute_ttc/merged_neighborhoods$population_2023,sids_kn6_w, randomisation = F, alternative = "two.sided")
+moranSIDS_6NN
+```
+
+-   Summary: The results indicate a statistically significant positive spatial autocorrelation for proportion of TTC commuters, when using the row standardized weight matrix by 6NN connectivity.
+
+-   Interpret: The p-value (1.437e-13) with 'two.sided' is less than 0.05, meaning the result is statistically significant. The Moran I statistic is postivie (0.3271), meaning neighboring regions have similar values. In other words, neighborhoods with similar commuting patterns (either high or low reliance on TTC) are more likely to be located near each other.
+
+### Row-standardized inverse distance weight
+
+```{r}
+#Row standardized
+moranSIDS_inverse_dis_rowstand<-moran.test(merged_neighborhoods$commute_ttc/merged_neighborhoods$population_2023,sids_idw_dist_w, randomisation = F, alternative = "two.sided")
+moranSIDS_inverse_dis_rowstand
+```
+
+-   Summary: The results indicate a statistically significant positive spatial autocorrelation for proportion of TTC commuters, when using the row standardized weight matrix by distance connectivity.
+
+-   Interpret: The p-value (0.001616) with 'two.sided' is less than 0.05, meaning the result is statistically significant. The Moran I statistic is postivie (0.3263), meaning neighboring regions have similar values. In other words, neighborhoods with similar commuting patterns (either high or low reliance on TTC) are more likely to be located near each other.
+
+### Binary inverse distance weight
+
+```{r}
+#Binary
+# inverse distance weighted weights
+dists<-nbdists(sids_kn1, coords)
+# inverse distance weighted weights
+idw <- lapply(dists, function(x) 1/(x^2))
+sids_idw_dist_w_binary <- nb2listw(sids_kn1, glist = idw, style ="B")
+
+moranSIDS_inverse_dis_binary<-moran.test(merged_neighborhoods$commute_ttc/merged_neighborhoods$population_2023,sids_idw_dist_w_binary, randomisation = F, alternative = "two.sided")
+moranSIDS_inverse_dis_binary
+
+```
+-   Summary: The results does NOT indicate a statistically significant positive spatial autocorrelation for proportion of TTC commuters, when using the binary weight matrix.
+
+-   Interpret: The p-value (0.08) with 'two.sided' is LARGER than 0.05, meaning the result is NOT statistically significant. 
+
+### Difference
+
+-   There is a difference between the binary weights and row standardized weights.
+
+-   For row standardized weights, it gives closer neighbors a higher weight. So closer neighbors have a stronger influence than those further away. However, in this case, all the weights are 1. So the closer neighours actually are NOT given a higher weight.
+
+-   For binary weights, the weights of areal units are the inversed distance. Since larger distance will lead to a smaller inversed distance weight, and smaller distance will lead to a larger inversed distance weight. Therefore, closer neighours actually are given a higher weight in this case.
+
+-   Reason:  row standardized weights make neighbors have an equal impact in this case, which may weaken the effect of the spatial autocorrelation. Binary weights give closer neighbors a stronger impact, which may result in a higher Moran's I. When nearby observations are similar, binary weights will highlights this pattern and reflect it in Moran's I.
+
+### Compare:
+
+Moran’s I is sensitive to the chosen weight matrix.
+
+## Q4 {.tabset}
+
+### Queen gives the largest Moran's I
+
+```{r}
+sids_nb_queen<-poly2nb(merged_neighborhoods,queen=TRUE)
+corrneigh<-sp.correlogram(sids_nb_queen, merged_neighborhoods$commute_ttc/merged_neighborhoods$population_2023, order=10, method="I", style="W", randomisation=F, zero.policy=TRUE)
+corrneigh
+```
+
+```{r}
+plot(corrneigh,main="Moran's I for proportion of TTC communters, Correlogram, Queen Lags")
+```
+
+Based on the plot, Moran's I is largest when lag=1, and then Moran's I decrease to negative value, and then go back to the value around zero. This shows that strong positive spatial correlation is mainly a local phenomenon. In other word, similarities of proportion of TTC commuters are primarily among immediate neighbors, instead of distant neighbors
+
+## Q5
+
+```{r}
+#Choose Queen Weight Matrix
+moran_TTC_mc<- moran.mc(merged_neighborhoods$commute_ttc/merged_neighborhoods$population_2023,
+                        sids_queen_w, nsim=9999, alternative="two.sided") 
+moran_TTC_mc
+```
+
+```{r}
+moran_TTC_mc$statistic
+moran_TTC_mc$p.value
+```
+
+```{r}
+distr999<- hist(moran_TTC_mc$res,freq=TRUE,col="light blue",main="Permutation Test for Moran's I - 9999 permutations",breaks=75)
+lines(moran_TTC_mc$statistic,max(distr999$counts),type="h",col="red",lwd=2)
+```
+
+Using MC simulation, Moran's I is 0.3783, and p-value is less than 2.2e-16. This indicates a statistically significant result that there is a positive spatial autocorrelation for proportion of TTC commuters. This result aligns with the result from Question 3(under no randomization).
+
+-   MCMC method: (1) This method is more robust because it does NOT rely on the assumption of normality of data. (2)The observed value of Moran's I is compared to the simulated distribution of Moran's I from  permutations.
+
+-   Method from Q3 (under no randomization): (1)This method rely on the assumption of normality of data.  (2)This method is faster because it doesn’t require multiple permutations of the data.
+
+
+## Q6 {.tabset}
+
+###Local Moran's I
+```{r}
+# Use Queen weight matrix
+mscat<-moran.plot(merged_neighborhoods$commute_ttc/merged_neighborhoods$population_2023,sids_queen_w, zero.policy=T, pch=16, col="black",cex=.5, quiet=F, labels=as.character(merged_neighborhoods$Neighbourh), main="Moran Scatterplot")
+```
+### H-H, H-L, L-H, L-L
+```{r}
+TTC_proportion = merged_neighborhoods$commute_ttc/merged_neighborhoods$population_2023
+
+moranLoc_TTC_prop<-localmoran(TTC_proportion,sids_queen_w, alternative="two.sided")
+
+attributes(moranLoc_TTC_prop)$quadr$mean
+```
+### statistical result
+```{r}
+merged_neighborhoods$Ii <- moranLoc_TTC_prop[, 1]       
+merged_neighborhoods$Z.Ii <- moranLoc_TTC_prop[, 4]    
+merged_neighborhoods$p.value <- p.adjust(moranLoc_TTC_prop[, 5],method="none")
+hist(merged_neighborhoods$p.value)
+```
+We can see that: more than half of neighborhoods has the statistically significant (<0.05) local Moran's I for the proportion of TTC commuters. 
+
+### map
+
+```{r}
+merged_neighborhoods$significant = merged_neighborhoods$p.value<=0.05
+
+clust.pal <- colorFactor(palette = c("blue", "lightblue", "lightpink","red"),
+                  domain=attributes(moranLoc_TTC_prop)$quadr$mean)
+sig.pal = colorFactor(c('green','yellow'), levels=c("TRUE","FALSE"))
+
+leaflet(merged_neighborhoods) %>%
+  addProviderTiles('CartoDB.Positron') %>%
+ 
+  addPolygons(fillColor = ~clust.pal(attributes(moranLoc_TTC_prop)$quadr$mean), 
+              color = "black", weight = 1, opacity = 1, fillOpacity = 0.7,
+              label = ~paste0("Local Moran I: ", round(Ii,2), " ,Neighbourh: ", Neighbourh, " ,TTC communter proportion: ", round(TTC_proportion, 2)),
+              highlightOptions = highlightOptions(weight = 2, color = "white", fillOpacity = 0.9)) %>%
+  addPolygons(color = ~sig.pal(significant), fill=F, weight=2)%>%
+  leaflet::addLegend(pal = clust.pal, values = ~attributes(moranLoc_TTC_prop)$quadr$mean, title = "Local Moran's I", opacity = 0.7)
+
+```
+From the map, it is really clear: there are two High-High clusters, and there are three Low-Low clusters In these regions, most Local Moran's I is statistically significant, as these clusters represent strong spatial autocorrelation. In contrast, High-Low and Low-High will not form clusters. These regions represent weak spatial autocorrelation, meaning less Local Moran's I is statistically significant.
+
+
+In this context, for example, High-High cluster represent urban centers or regions with high public transit usage. High-Low regions might represent regionss with high TTC usage surrounded by neighborhoods with lower usage. High-Low and Low-High regions could be the transition zone of TTC usage.
+
+### Use bonferroni
+```{r}
+merged_neighborhoods$Ii_bon <- moranLoc_TTC_prop[, 1]       
+merged_neighborhoods$Z.Ii_bon <- moranLoc_TTC_prop[, 4]    
+merged_neighborhoods$p.value_bon <- p.adjust(moranLoc_TTC_prop[, 5],method="bonferroni")
+hist(merged_neighborhoods$p.value_bon)
+```
+
+If we apply bonferroni adjustment, only few neighborhoods has a significant local Moran's I 
+
+
+## Q7
+```{r}
+#global
+sids_queen_w<-nb2listw(sids_nb_queen, style="W")
+globalGSIDS<-globalG.test(merged_neighborhoods$commute_ttc/merged_neighborhoods$population_2023,sids_queen_w)
+globalGSIDS
+```
+
+```{r}
+# local
+localGSIDS<-localG(merged_neighborhoods$commute_ttc/merged_neighborhoods$population_2023,sids_queen_w)
+
+```
+
+```{r}
+# Add the Getis statistics to the dataset
+merged_neighborhoods$Gi <- attributes(localGSIDS)$internals[, 1]       # Local Moran's I statistic
+merged_neighborhoods$Z.Gi <- attributes(localGSIDS)$internals[, 4]       # Z-scores (standardized values)
+merged_neighborhoods$g.p.value <- p.adjust(attributes(localGSIDS)$internals[, 5],method="none")  # p-values
+hist(merged_neighborhoods$g.p.value)
+```
+We can see that: more than half of neighborhoods has the statistically significant (<0.05) local Getis-Ord G*  for the proportion of TTC commuters. 
+
+```{r}
+merged_neighborhoods$significant_gi = merged_neighborhoods$g.p.value<=0.05
+
+# Define color palette for Getis-Ord Gi* (hotspots and cold spots)
+gstar.pal <- colorNumeric(palette = "RdBu", domain = merged_neighborhoods$Z.Gi, reverse=TRUE)
+# define significant counties
+sig.pal = colorFactor(c('green','white'), levels=c("TRUE","FALSE"))
+# Create a Leaflet map
+leaflet(merged_neighborhoods) %>%
+  addProviderTiles('CartoDB.Positron') %>%
+   addPolygons(fillColor = ~gstar.pal(merged_neighborhoods$Z.Gi), 
+              color = "black", weight = 1, opacity = 1, fillOpacity = 0.7,
+              label = ~paste0("LocalG: ", round(Z.Gi,2), " ,Neighbourh: ", Neighbourh, " ,TTC proportion: ", round(TTC_proportion, 2)),
+              highlightOptions = highlightOptions(weight = 2, color = "#666", fillOpacity = 0.9)) %>%
+  addPolygons(color = ~sig.pal(significant_gi), fill=F, weight=2)%>%
+  leaflet::addLegend(pal = gstar.pal, values = ~merged_neighborhoods$Z.Gi, title = "Getis-Ord", opacity = 0.7)
+```
+From class, we know :a large positive value suggests a cluster of high TTC proportions (hot spot) and a large negative value indicates a cluster of low TTC proportions (cold spot).
+
+From the map, we can see: regions with large positive/negative value has a p-value (<0.05), meaning that spatial autocorrelation is statistically significant(green line). In contrast, light red/blue regions tend to have insignificant spatial autocorrelation.
+ 
+And the result of this map about the significant region aligns with the result from the map in Question 6
+
