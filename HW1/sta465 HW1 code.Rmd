@@ -1,0 +1,607 @@
+---
+title: "STA465 HW1"
+output:
+  html_document: default
+  pdf_document: default
+date: "2024-09-29"
+---
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(leaflet) 
+library(htmlwidgets) 
+library(sf) 
+library(ggmap) 
+library(units)
+library(dplyr)
+```
+
+
+Part A. 1.
+```{r}
+data.dir = gsub('/code', '/data', getwd())
+neighborhoods= st_read(paste0(data.dir, '/hw1-data/Toronto_Neighbourhoods/Toronto_Neighbourhoods.shp'))
+subway_lines= st_read(paste0(data.dir, '/hw1-data/ttc-subway-shapefile-wgs84/TTC_SUBWAY_LINES_WGS84.shp'))
+subway_lines_wgs84 <- st_transform(subway_lines, crs = 4326)
+neighborhoods_wgs84 <- st_transform(neighborhoods, crs = 4326)
+
+
+crime_sites = read.csv(paste0(data.dir, "/hw1-data/toronto-crimes-06-2024.csv")) %>% 
+  mutate(REPORT_DATE = as.Date(REPORT_DATE))
+
+
+
+```
+Write-up: 
+Toronto_Neighbourhoods.shp is Polygons/Multipolygons
+TTC_SUBWAY_LINES_WGS84.shp is Polylines
+toronto-crimes-06-2024.csv is points/multipoints
+
+.shp: main shapefile
+.shx: spatial index
+.dbf: dBase file which stores the non-spatial columns
+.prj: definition of the projection of the spatial data
+
+```{r}
+head(neighborhoods)
+```
+
+```{r}
+head(subway_lines)
+```
+
+```{r}
+head(crime_sites)
+#transform csv into shapefile
+crime_sites = st_as_sf(crime_sites, 
+               coords=c('LONG_WGS84','LAT_WGS84'),
+               crs=4326, # projection
+               remove=TRUE) # remove coordinate columns
+crime_sites_wgs84 <- st_transform(crime_sites, crs = 4326)
+
+```
+
+
+```{r}
+crime_sites = crime_sites[1:100, ]
+
+leaflet() %>%
+  # Add CartoDB.Positron layer
+  addProviderTiles('CartoDB.Positron') %>%
+  
+  addCircles(data = crime_sites, 
+             color = 'firebrick', 
+             fillOpacity = 1, 
+             opacity = 1, 
+             radius = ~OCC_HOUR*10,
+             label = ~MCI_CATEGORY,  # Assuming you have a column for crime descriptions/labels
+             popup = 'CN Tower: Touring Bike Counts: 100',  # Popup for more details
+             group = "Crime Sites") %>%
+  
+  # Add subway lines 
+  addPolylines(data = subway_lines,
+               color = ~case_when(  # Conditional color based on route name
+                 ROUTE_NAME == "LINE 1 (YONGE-UNIVERSITY)" ~ "pink",
+                 ROUTE_NAME == "LINE 2 (BLOOR - DANFORTH)" ~ "green",
+                 ROUTE_NAME == "LINE 3 (SCARBOROUGH)" ~ "blue",
+                 ROUTE_NAME == "LINE 4 (SHEPPARD)" ~ "yellow",
+                 TRUE ~ "black"),  # Default color
+               label = ~ROUTE_NAME,  # Label the subway routes
+               popup = ~ROUTE_NAME,
+               group = "Subway Lines") %>%
+  
+  # Add neighborhood polygons 
+  addPolygons(data = neighborhoods,
+              fillColor = "gray",   # Add a default color for neighborhoods
+              fillOpacity = 0,
+              color = "black",
+              weight = 0.5,
+              label = ~Neighbourh,  
+              popup = ~Neighbourh,
+              group = "Neighborhoods") %>%
+  
+  
+  addLayersControl(
+    overlayGroups = c("Crime Sites", "Subway Lines", "Neighborhoods"),
+    options = layersControlOptions(collapsed = FALSE)
+  )
+
+```
+
+
+########################################################################################################################
+Part A. 2.
+```{r}
+st_crs(crime_sites)
+st_crs(subway_lines)
+st_crs(neighborhoods)
+```
+Write-Up: 
+(1) They all have datum as WGS 84. WGS 84 uses an ellipsoid (a mathematically defined, flattened sphere) to approximate the shape of the Earth. The specific ellipsoid used is called the WGS 84 ellipsoid. It uses an origin at the center of the Earth for defining locations. WGS 84 uses a geographic coordinate system based on latitude, longitude, and altitude. These coordinates are expressed in degrees for latitude and longitude, and meters for altitude.
+(2) The datum defines an origin point of the coordinate axes and the direction of the axes.
+(3) Yes, there is a need to apply a single datum type to all 3 datasets, so that the the type of ellipsoid model, Reference Frame and coordinate System are the same. 
+
+
+########################################################################################################################
+
+Part A.3
+Projection affects spatial operations such as calculating distance and area. Operations between spatial objects also require them to be in the same projection. And UTM projection minimizes distortion over smaller areas.
+```{r}
+crime_sites <- st_transform(crime_sites, crs = 32617)
+subway_lines <- st_transform(subway_lines, crs = 32617)
+neighborhoods <- st_transform(neighborhoods, crs = 32617)
+```
+
+########################################################################################################################
+Part A.4
+```{r}
+utm17.area = neighborhoods %>% 
+  st_area(geometry) %>% set_units(km^2)
+
+tibble(
+  neighborhood = neighborhoods$Neighbourh,   
+  area_km2 = as.numeric(utm17.area),       
+  population = neighborhoods$Total_Popu
+)
+
+plot(data.frame(utm17.area, neighborhoods$Total_Popu))
+
+cor(as.numeric(utm17.area), as.numeric(neighborhoods$Total_Popu), use = "complete.obs")
+```
+Write-Up: From the scatter plot, we can see there is a positive correlation (0.6205686) between the area and population. This means population will increase as area increases.
+
+########################################################################################################################
+
+
+Part A.5
+```{r}
+#spatial join of crimes to neighborhoods
+neighborhood_crimes <- st_join(neighborhoods, crime_sites, join = st_intersects)
+neighborhood_crimes <- st_transform(neighborhood_crimes, crs = 4326)
+
+# Summarize the number of crimes per Neighbourh
+crime.neighor = neighborhood_crimes %>% as_tibble() %>% 
+  group_by(Neighbourh) %>%
+  summarise(total_crimes=n())
+
+population = neighborhoods$Total_Popu  # Sum of population columns (adjust names as needed)
+crime_rate_per_capita = crime.neighor$total_crimes / population
+
+crime_summary <- tibble(crime.neighor,population=population,crime_rate_per_capita=crime_rate_per_capita )
+
+Merged_Neighbor_crimes = merge(neighborhoods_wgs84, crime.neighor, by='Neighbourh')
+Merged_Neighbor_crimes = merge(Merged_Neighbor_crimes, crime_summary, by='Neighbourh')
+
+
+```
+  
+
+```{r}
+#5(a):
+
+crime.pal = colorNumeric(palette = "YlOrRd", 
+                         domain=Merged_Neighbor_crimes$total_crimes.x)
+ 
+
+leaflet(Merged_Neighbor_crimes) %>% 
+  addProviderTiles('CartoDB.Positron') %>% 
+  addPolygons(weight=0, fillOpacity=.8, color=~crime.pal(Merged_Neighbor_crimes$total_crimes.x),
+              label=~paste0(Neighbourh, ": ", total_crimes.x)) %>% 
+  addLegend(pal = crime.pal,
+            values = Merged_Neighbor_crimes$total_crimes.x,
+            title = "Total Crimes",
+            position = "bottomright")
+
+
+#5(b):
+crime_rate.pal = colorNumeric(palette = "YlOrRd", 
+                         domain=Merged_Neighbor_crimes$crime_rate_per_capita)
+
+leaflet(Merged_Neighbor_crimes) %>% 
+  addProviderTiles('CartoDB.Positron') %>% 
+  addPolygons(weight=0, fillOpacity=.8, color=~crime_rate.pal(Merged_Neighbor_crimes$crime_rate_per_capita),
+              label=~paste0(Merged_Neighbor_crimes$Neighbourh, ": ", Merged_Neighbor_crimes$crime_rate_per_capita)) %>% 
+  addLegend(pal = crime_rate.pal, 
+            values = Merged_Neighbor_crimes$crime_rate_per_capita,
+            title = "Total Crimes",
+            position = "bottomright")
+
+```
+From the map showing the counts of crimes in each neighborhood, we can see that Waterfront Communities-The Island have the most number of crimes. And the neighborhood around these this neighborhoods have more crimes compared to others. Also, we can see there are more crimes on the west than the east.
+
+From the map showing the per capita crime rate, we can see that West Humber-clairville have the highest rates. And the neighborhood around these this neighborhoods have higher crimes rates compared to others. Similarly, we can see there are higher crime rate on the west than the east.
+
+########################################################################################################################
+Part A.6
+
+```{r}
+subway_buffer <- st_buffer(subway_lines, dist = 1000)
+subway_buffer_wgs84 <- st_transform(subway_buffer, crs = 4326)
+
+#Create the leaflet map with the CartoDB tiles
+leaflet() %>%
+  addProviderTiles('CartoDB.Positron') %>%
+  
+
+  addPolylines(data = subway_lines_wgs84, color = "blue", weight = 2, opacity = 0.8) %>%
+  
+  
+  addPolygons(data = subway_buffer_wgs84, fillColor = "red", fillOpacity = 0.3, color = "red", weight = 1) %>%
+  
+  addCircles(data = crime_sites_wgs84, color = 'black', fillOpacity = 0.1, radius = 25) %>%
+  
+  addLegend("bottomright", colors = "red", labels = "1 km Buffer", title = "Legend")
+```
+
+
+```{r}
+
+crimes_in_buffer <- st_join(subway_buffer_wgs84, crime_sites_wgs84, join = st_intersects)
+
+
+
+crime_summary_table <- crimes_in_buffer %>%
+  as_tibble() %>% 
+  group_by(ROUTE_NAME) %>%  
+  summarise(total_crimes_in_buffer = n()) %>%  
+  mutate(proportion_of_crimes_occured_within_buffer = total_crimes_in_buffer / nrow(crime_sites))  
+
+crime_summary_table
+```
+We can see the proportion of the crimes occurred within 1 km subway line 1 is nearly 25.6%, and the proportion of the crimes occurred within 1 km subway line 1 is nearly 17.4%.
+
+
+########################################################################################################################
+
+Part A.7
+
+```{r}
+#(a)The following neighborhoods has subway
+neighborhoods_subway_or_not = st_join(neighborhoods, subway_lines, join = st_intersects)
+neighborhoods_subway_or_not <- neighborhoods_subway_or_not %>% distinct(Neighbourh, .keep_all = TRUE)
+
+neighborhoods_subway= filter(neighborhoods_subway_or_not, ROUTE_NAME!='NA')
+neighborhoods_without_subway= filter(neighborhoods_subway_or_not, is.na(ROUTE_NAME))
+print(neighborhoods_subway$Neighbourh)
+
+```
+
+```{r}
+#(b)
+neighborhoods_subway_crime <- st_join(neighborhoods_subway, crime_sites, join = st_intersects)
+neighborhoods_wihtout_subway_crime <- st_join(neighborhoods_without_subway, crime_sites, join = st_intersects)
+
+neighborhoods_subway_crime_table<-neighborhoods_subway_crime %>% as_tibble() %>% 
+  group_by(Neighbourh) %>%
+  summarise(total_crimes=n())
+
+neighborhoods_without_subway_crime_table<-neighborhoods_wihtout_subway_crime %>% as_tibble() %>% 
+  group_by(Neighbourh) %>%
+  summarise(total_crimes=n())
+
+print(mean(neighborhoods_subway_crime_table$total_crimes))
+print(mean(neighborhoods_without_subway_crime_table$total_crimes))
+
+```
+We can see the average of crimes in the neighborhoods with subway is higher than the average of crimes in the neighborhoods without subway.
+
+
+
+########################################################################################################################
+########################################################################################################################
+########################################################################################################################
+
+Part B.1
+
+
+```{r}
+library(tidyverse)
+library(leaflet)
+library(sf)
+library(geoR)
+library(fields)
+library(maps)
+library(mapdata)
+library(units)
+```
+
+Part B (1)(a)
+```{r}
+# Set parameter values
+h <- seq(1e-5, 15, length.out = 10000)
+
+tau2 <- 0.5
+sigma2 <- 4
+phi <- 6
+lambda <- 0.5
+
+# Define the semivariogram functions
+linear <- tau2 + sigma2 * h
+power_model <- tau2 + sigma2 * (h**lambda)
+rational_quadratic <- tau2 + sigma2 * (h**2 / (1 + phi * (h**2)))
+powered_exponential <- tau2 + sigma2 * (1 - exp(-abs(phi * h)^lambda))
+
+# Handle the Wave semivariogram
+wave <- tau2 + sigma2 * (1 - sin(phi * h) / (phi * h))
+
+
+# Plot the semivariograms
+plot(h, linear, type = "l", col = "red", ylim = c(0, 10), ylab = "Semivariance", xlab = "Distance h")
+lines(h, power_model, col = "blue")
+lines(h, rational_quadratic, col = "green")
+lines(h, powered_exponential, col = "purple")
+lines(h, wave, col = "orange")
+abline(h = sigma2+tau2, col = "black") 
+
+legend("topright", legend = c("Linear", "Power model", "Rational quadratic", "Powered exponential", "Wave"), col = c("red", "blue", "green", "purple", "orange"), lty = 1, cex = 0.7)
+
+```
+Part B (1)(b)
+
+1.Linear: The semivariance increases linearly, with the increase of distance. The value of semivariance exceed the sill as h(distance) increase to a certain points. 
+2.Power Model: The semivariance increases with a decreasing slope, with the increase of distance. Similarly, the value of semivariance exceed the sill as h(distance) increase to a certain points. 
+3.Rational Quadratic: Like power model, the semivariance increases with a decreasing slope. However, the maximum value of semivariance in rational Quadratic model is far smaller than the sill. Semivariance in rational Quadratic model can never reach the sill with the increase of h. 
+4.Powered Exponential: The semivariance increases with a decreasing slope, with the increase of distance. The value of semivariance approach closely to the sill, when h approaches closely to the range(phi).
+5.Wave: At first, semivariance increases as h increase. Then after a certain point, the The value of semivariance oscillates around the sill. Then, as h increases further, the amplitude becomes smaller.
+
+
+
+The Powered Exponential and wave model are stationary: As the semivariance approaches to the sill as h increases. This indicates that the spatial correlation between points becomes constant beyond a certain distance. Also it means covariance(C(h)) goes to 0 as h goes to infinity. So C(h) exists. So stationarity is satified.
+
+The line model and power model are not stationary. The value of semivariance increase indefinitely as h(distance) increase. 
+
+The Rational Quadratic model is stationary. Because the semivariance becomes more and more flatter as h increases. However, the asymptote that semivariance can reach is smaller the real sill, meaning the variance beyond the range is smaller.
+
+
+#######################################################################################################################
+Part B (1)(c)
+```{r}
+
+lambda_values <- c(0.5, 1, 2)
+
+
+plot(h, tau2 + sigma2 * h^lambda_values[1], type = "l", col = "blue", ylim = c(0, 20),
+     ylab = "Semivariance", xlab = "Distance h", main = "Power Models")
+lines(h,tau2 + sigma2 * h^lambda_values[2], col = "purple", lwd = 1)
+lines(h,tau2 + sigma2 * h^lambda_values[3], col = "darkgreen", lwd = 1)
+legend("topright", legend = c("lambda = 0.5", "lambda = 1", "lambda = 2"), 
+       col = c("blue", "purple", "darkgreen"), lty = 1, lwd = 2)
+```
+The parameter lambda_values represents the slope of the curves. In other words, λ controls how quickly semivariance increases as the distance increases.
+For example, (1)when lamda=1, the power model is the same as linear function.
+(2)When lamda > 1, the semivariance increases with increasing slope as h increase. The increase becomes steeper. The first derivative keeps increasing. 
+(3)When lamda < 1, the semivariance increases with decreasing slop as h increase. The increase is more gradual. The first derivative keeps decreasing
+```{r}
+#(c) continued
+lambda_values <- c(0.5, 1, 2)
+
+
+plot(h, tau2 + sigma2 * (1 - exp(-abs(phi * h)^lambda_values[1])), type = "l", col = "blue", ylim = c(0, 5),
+     ylab = "Semivariance", xlab = "Distance h", main = "Powered Exponential Models")
+lines(h,tau2 + sigma2 * (1 - exp(-abs(phi * h)^lambda_values[2])), col = "purple", lwd = 1)
+lines(h,tau2 + sigma2 * (1 - exp(-abs(phi * h)^lambda_values[3])), col = "darkgreen", lwd = 1)
+legend("topright", legend = c("lambda = 0.5", "lambda = 1", "lambda = 2"), 
+       col = c("blue", "purple", "darkgreen"), lty = 1, lwd = 2)
+
+```
+The parameter lambda represents: how fast the semivariance move close to the sill.
+We can see: The larger the value of lambda is, the faster the semivariance approach to the sill.
+But no matter what the value of lamda is, the semivariance increases with increasing slope as h increase. The increase becomes steeper.
+
+#######################################################################################################################
+Part B (1)(d)
+######### rational_quadratic ######### 
+```{r}
+tau2_values <- c(0.5, 1, 2)
+sigma2_values <- c(4,5,6)
+phi_values <- c(6, 10, 14)
+
+rational_quadratic <- tau2 + sigma2 * (h^2 / (1 + phi * h^2))
+
+#rational_quadratic with changing tau
+
+plot(h, tau2_values[1] + sigma2 * (h^2 / (1 + phi * h^2)), type = "l", col = "blue", ylim = c(0, 5),
+     ylab = "Semivariance", xlab = "Distance h", main = "Rational quadratic with changing tau")
+lines(h,tau2_values[2] + sigma2 * (h^2 / (1 + phi * h^2)), col = "purple", lwd = 1)
+lines(h,tau2_values[3] + sigma2 * (h^2 / (1 + phi * h^2)), col = "darkgreen", lwd = 1)
+legend("topright", legend = c("tau2 = 0.5", "tau2 = 1", "tau2 = 2"), 
+       col = c("blue", "purple", "darkgreen"), lty = 1, lwd = 2)
+```
+tau(nugget) represent the discontinuity at the origin. The parameter tau can move the curves vertically. For the same h, the value of semivariance is larger when tau2 is larger. And, the value of tau does not affect the slope of changing of semivariance.
+
+```{r}
+#rational_quadratic with changing sigma2
+
+plot(h, tau2 + sigma2_values[1] * (h^2 / (1 + phi * h^2)), type = "l", col = "blue", ylim = c(0, 10),
+     ylab = "Semivariance", xlab = "Distance h", main = "Rational quadratic with changing sigma2")
+lines(h,tau2 + sigma2_values[2] * (h^2 / (1 + phi * h^2)), col = "purple", lwd = 1)
+lines(h,tau2 + sigma2_values[3] * (h^2 / (1 + phi * h^2)), col = "darkgreen", lwd = 1)
+legend("topright", legend = c("sigma2 = 4", "sigma2 = 5", "sigma2 = 6"), 
+       col = c("blue", "purple", "darkgreen"), lty = 1, lwd = 2)
+```
+sigma2(sill) represent the asymptote where semivariance is reached. A larger sigma2 means semivariance can reach a higher value. A smaller sigma2 means semivariance can reach a smaller value. However,the distance where the semivariance stabilizes does not change with sigma2.
+
+```{r}
+phi_values <- c(1, 6,20)
+#rational_quadratic with changing phi
+
+plot(h, tau2 + sigma2 * (h^2 / (1 + phi_values[1] * h^2)), type = "l", col = "blue", ylim = c(0, 10),
+     ylab = "Semivariance", xlab = "Distance h", main = "Rational quadratic with changing phi")
+lines(h,tau2 + sigma2 * (h^2 / (1 + phi_values[2] * h^2)), col = "purple", lwd = 1)
+lines(h,tau2 + sigma2 * (h^2 / (1 + phi_values[3] * h^2)), col = "darkgreen", lwd = 1)
+legend("topright", legend = c("phi = 1", "phi = 6", "phi = 20"), 
+       col = c("blue", "purple", "darkgreen"), lty = 1, lwd = 2)
+```
+phi(range) represents the distance where the semivariance reached the asymptote. Beyond this distance, it is assumed that there is no autocorrelation any more. phi Controls how quickly the semivariogram reaches its sill. A smaller phi means the semivariogram reaches its sill faster. Interestingly, the value of asymptote(the highest possible value of semivariance) does change with phi in the case of rational quadratic.
+
+
+######### wave ######### 
+```{r}
+tau2_values <- c(0.5, 1, 2)
+sigma2_values <- c(4,5,6)
+phi_values <- c(6, 10, 14)
+
+wave <- tau2 + sigma2 * (1 - sin(phi * h) / (phi * h))
+
+
+#wave with changing tau
+
+plot(h, tau2_values[1] + sigma2 * (1 - sin(phi * h) / (phi * h)), type = "l", col = "blue", ylim = c(0, 8),
+     ylab = "Semivariance", xlab = "Distance h", main = "wave function with changing tau")
+lines(h, tau2_values[2] + sigma2 * (1 - sin(phi * h) / (phi * h)), col = "purple", lwd = 1)
+lines(h, tau2_values[3] + sigma2 * (1 - sin(phi * h) / (phi * h)), col = "darkgreen", lwd = 1)
+legend("topright", legend = c("tau2 = 0.5", "tau2 = 1", "tau2 = 2"), 
+       col = c("blue", "purple", "darkgreen"), lty = 1, lwd = 2)
+```
+Similary, tau(nugget) represent the discontinuity at the origin. The parameter tau can move the curves vertically. For the same h, the value of semivariance is larger when tau2 is larger. And, the value of tau does not affect the slope of changing of semivariance. And the shape of wave does not change 
+
+```{r}
+
+#wave with changing sigma2
+
+plot(h, tau2 + sigma2_values[1] * (1 - sin(phi * h) / (phi * h)), type = "l", col = "blue", ylim = c(0, 8),
+     ylab = "Semivariance", xlab = "Distance h", main = "wave function with changing sigma2")
+lines(h, tau2 + sigma2_values[2] * (1 - sin(phi * h) / (phi * h)), col = "purple", lwd = 1)
+lines(h, tau2 + sigma2_values[3] * (1 - sin(phi * h) / (phi * h)), col = "darkgreen", lwd = 1)
+legend("topright", legend = c("sigma2 = 4", "sigma2 = 5", "sigma2 = 6"), 
+       col = c("blue", "purple", "darkgreen"), lty = 1, lwd = 2)
+```
+Similarly, sigma2(sill) represent the asymptote where semivariance is reached. A larger sigma2 means semivariance can reach a higher value. A smaller sigma2 means semivariance can reach a smaller value. However,the distance where the semivariance stabilizes does not change with sigma2. And the shape of wave does not change 
+
+```{r}
+#wave with changing phi
+
+plot(h, tau2 + sigma2 * (1 - sin(phi_values[1] * h) / (phi_values[1]* h)), type = "l", col = "blue", ylim = c(0, 8),
+     ylab = "Semivariance", xlab = "Distance h", main = "wave function with changing phi")
+lines(h, tau2 + sigma2 * (1 - sin(phi_values[2] * h) / (phi_values[2] * h)), col = "purple", lwd = 1)
+lines(h, tau2 + sigma2 * (1 - sin(phi_values[3] * h) / (phi_values[3] * h)), col = "darkgreen", lwd = 1)
+legend("topright", legend = c("phi = 6", "phi = 10", "phi = 14"), 
+       col = c("blue", "purple", "darkgreen"), lty = 1, lwd = 2)
+```
+Similarly, phi(range) represents the distance where the semivariance reached the asymptote. phi Controls how quickly the semivariogram reaches its sill. We can see that the semivariogram of the wave function with a larger phi reaches its sill faster. Note that the value of asymptote does not change with phi.
+
+
+#######################################################################################################################
+Part B (2)
+
+```{r}
+
+#I use the same parameter values as question(1)
+exponential <- tau2+sigma2*(1-exp(-h/phi))
+spherical <- tau2 +sigma2*(1.5*(h/phi)-0.5*((h/phi)**3))
+gaussain <- tau2 +sigma2*(1-exp(-(h**2)/(phi*phi)))
+
+
+#c(h)= c(0)-semivarigrarm
+#c(0)= data variance = sill
+
+cov_exponential = tau2+sigma2 -  exponential
+cov_spherical = tau2+sigma2-  spherical
+cov_gaussain =tau2+sigma2 -  gaussain
+
+plot(h,cov_exponential,type = "l",ylab = "C(h)", ylim=c(0,10), xlab = "Distance h", main = "C(h) of exponential function")
+
+
+
+plot(h,cov_spherical, type = "l",ylab = "C(h)", ylim=c(0,10),xlab = "Distance h", main = "C(h) of spherical function",)
+
+plot(h,cov_gaussain, type = "l", ylab = "C(h)", ylim=c(0,10),xlab = "Distance h", main = "C(h) of gaussain function")
+
+
+```
+
+#######################################################################################################################
+Part B (3)
+
+```{r}
+# For the purpose of neatness, we use a function
+
+
+
+
+
+matern_covariance <- function(h, kappa, phi, sigma2 = 1) {
+
+    term1 <- (sigma2 / (gamma(kappa) * (2**(kappa - 1))))
+    term2 <- (sqrt(2 * kappa) * (h / phi))**kappa
+    term3 <- besselK((sqrt(2 * kappa) * (h / phi)), kappa)
+    return(term1 * term2 * term3)
+  
+}
+    
+
+# Define parameter values
+sigma2 <- 4  
+phi <- 6     
+h <- seq(0, 10, length.out = 100)  
+k_values <- c(0.01, 0.1, 1, 5, 10)  
+
+
+
+
+# Create an empty plot
+plot(h, matern_covariance(h, k_values[1], sigma2, phi), type = "l", col = "blue", ylim = c(0, 6),
+     ylab = "C(h)", xlab = "Distance h", main = "Matern Covariance with Changing k")
+lines(h, matern_covariance(h, k_values[2], sigma2, phi), col = "red")
+lines(h, matern_covariance(h, k_values[3], sigma2, phi), col = "green")
+lines(h, matern_covariance(h, k_values[4], sigma2, phi), col = "orange")
+lines(h, matern_covariance(h, k_values[5], sigma2, phi), col = "black")
+lines(h, matern_covariance(h, 10000, sigma2, phi), col = "purple")
+
+legend("topright", legend = paste("kappa =", k_values), col = c("blue", "red", "green","orange","brown","purple"), lty = 1)
+
+```
+As k decrease to 0, the lines becomes a flat line. This means C(h) decrease with a decreasing speed. The shape of line become more similar to C(h) of exponential function
+When k<1, the C(0) is not equal to sigma2. When k>1, the C(0) is equal to sigma2. 
+As k increase, the lines becomes steeper, which means the C(h) decrease with a increasing speed.The shape of line become more similar to C(h) of gaussain function
+However, as k increase to infinity, the line vanish, maybe due to numeric instability in R.
+
+
+#######################################################################################################################
+#######################################################################################################################
+Part B (4)
+```{r}
+dorian <- read.csv(paste0(data.dir, "/dorian.csv")) 
+head(dorian)
+
+
+dorian = dorian %>% 
+  st_as_sf(coords=c('lon','lat'), crs=4326, remove=FALSE) %>% #set datum
+          st_transform(crs=32617) %>% #project to UTM 11 (meters)
+          mutate(x = st_coordinates(.)[,1]/1000, y = st_coordinates(.)[,2]/1000) # extract x, y in km
+
+head(dorian)
+```
+```{r}
+dorian1 <- dorian %>% st_drop_geometry()
+head(dorian1)
+dorian1_wind<-as.geodata(dorian1,coords.col=c(10,11),data.col=7)
+dorian1_atm<-as.geodata(dorian1,coords.col=c(10,11),data.col=8)
+
+semi_var_wind<-variog(dorian1_wind,option="cloud")
+semi_var_atm<-variog(dorian1_atm,option="cloud")
+```
+
+```{r}
+plot(semi_var_wind,xlab="Distance (h), km", main= 'semivariance of all pairs of point in terms of wind speed')
+plot(semi_var_atm,xlab="Distance (h), km",main= 'semivariance of all pairs of point in terms of wind speed')
+```
+
+
+
+```{r}
+#empirical semi-variogram of wind speed
+semi_var_wind_bin<-variog(dorian1_wind,uvec=seq(0,semi_var_wind$max.dist,l=20),option="bin")
+plot(semi_var_wind_bin, xlab="Distance (h), km",main = "empirical semi-variogram bin plot of wind speed")
+semi_var_wind_box<-variog(dorian1_wind,uvec=seq(0,semi_var_wind$max.dist,l=20),bin.cloud=T)
+plot(semi_var_wind_box,bin.cloud=T,xlab="Bin", main = "empirical semi-variogram boxplot of wind speed")
+```
+```{r}
+#empirical semi-variogram of wind speed
+semi_var_atm_bin<-variog(dorian1_atm,uvec=seq(0,semi_var_atm$max.dist,l=20),option="bin")
+plot(semi_var_atm_bin, xlab="Distance (h), km", main = "empirical semi-variogram bin plot of atmosphere pressure")
+semi_var_atm_box<-variog(dorian1_atm,uvec=seq(0,semi_var_atm$max.dist,l=20),bin.cloud=T)
+plot(semi_var_atm_box,bin.cloud=T,xlab="Bin", main = "empirical semi-variogram boxplot of atmosphere pressure")
+```
+
