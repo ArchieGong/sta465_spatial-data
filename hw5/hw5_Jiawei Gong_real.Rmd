@@ -1,0 +1,801 @@
+---
+title: "STA465 HW 5"
+author: "Jiawei Gong"
+date: "2024"
+output:
+  html_document: default
+  pdf_document: default
+editor_options: 
+  markdown: 
+    wrap: sentence
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Setup {.tabset}
+
+## 1
+### 1(a)
+
+```{r,message=F,warning=F,echo=FALSE}
+######################################
+# Load required packages
+######################################
+library(sf)        # For spatial data handling
+library(dplyr)     # For data manipulation
+library(leaflet)   # For interactive maps
+library(spatstat)
+library(splancs)
+######################################
+# 1(a) Read in and re-project the data
+######################################
+
+#---- 1. Read CSV data ----
+larynx_df <- read.table("/Users/davegong/Desktop/year4 fall/sta465/hw5/pp-data/larynx.txt",header=TRUE) 
+lung_df<- read.table("/Users/davegong/Desktop/year4 fall/sta465/hw5/pp-data/lung.txt",header=TRUE)
+incin_df <- read.table("/Users/davegong/Desktop/year4 fall/sta465/hw5/pp-data/incinerator.txt",header=TRUE)
+
+#---- 2. Multiply X,Y by 10 to convert from 100m to meters ----
+lung_df <- lung_df %>%
+  mutate(x_m = x * 10,
+         y_m = y * 10)
+
+larynx_df <- larynx_df %>%
+  mutate(x_m = x * 10,
+         y_m = y * 10)
+
+incin_df <- incin_df %>%
+  mutate(x_m = x * 10,
+         y_m = y * 10)
+
+#---- 3. Convert data frames to sf objects (in British National Grid) ----
+lung_sf <- st_as_sf(lung_df, coords = c("x_m", "y_m"), crs = 27700)
+larynx_sf <- st_as_sf(larynx_df, coords = c("x_m", "y_m"), crs = 27700)
+incin_sf <- st_as_sf(incin_df, coords = c("x_m", "y_m"), crs = 27700)
+
+#---- 4. Transform to WGS84 (lat/lon) ----
+lung_sf_wgs84   <- st_transform(lung_sf, 4326)
+larynx_sf_wgs84 <- st_transform(larynx_sf, 4326)
+incin_sf_wgs84  <- st_transform(incin_sf, 4326)
+
+#---- 5. Extract lat/long and drop geometry for spatstat compatibility ----
+#      (Keep a version that *has* geometry for mapping, 
+#       and another version that is geometry-free if using spatstat.)
+lung_sf_wgs84 <- lung_sf_wgs84 %>%
+  mutate(lon = st_coordinates(.)[,1],
+         lat = st_coordinates(.)[,2])
+
+lung_no_geom <- lung_sf_wgs84 %>%
+  st_drop_geometry()
+
+# Do likewise for larynx and incinerator if needed
+larynx_sf_wgs84 <- larynx_sf_wgs84 %>%
+  mutate(lon = st_coordinates(.)[,1],
+         lat = st_coordinates(.)[,2])
+
+larynx_no_geom <- larynx_sf_wgs84 %>%
+  st_drop_geometry()
+
+incin_sf_wgs84 <- incin_sf_wgs84 %>%
+  mutate(lon = st_coordinates(.)[,1],
+         lat = st_coordinates(.)[,2])
+
+incin_no_geom <- incin_sf_wgs84 %>%
+  st_drop_geometry()
+
+#---- 6. Show the headers and the counts of lung and larynx cancer cases ----
+# (Adjust as needed to show the incinerator data, too.)
+print("The header of lung cancers: ")
+head(lung_no_geom)
+nrow(lung_no_geom)
+print("The number of lung cancers is 978")
+
+print("The header of larynx cancers: ")
+head(larynx_no_geom)
+nrow(larynx_no_geom)    # number of larynx cancer cases
+print("The number of larynx cancers is 58")
+
+print("The header of incinerator: ")
+head(incin_no_geom)
+nrow(incin_no_geom)
+print("The number of incinerator is 1")
+```
+
+### 1(b)
+
+```{r,message=F,warning=F,echo=FALSE}
+######################################
+# 1(b) Bind datasets & create polygon window
+######################################
+
+#---- 1. Combine all sf objects so we can find a bounding "window" ----
+all_sf <- rbind(lung_sf, larynx_sf, incin_sf)
+all_sf <- all_sf %>%
+  mutate(x = x * 10,
+         y = y * 10)
+lung_sf <- lung_sf %>%
+  mutate(x = x * 10,
+         y = y * 10)
+larynx_sf <- larynx_sf %>%
+  mutate(x = x * 10,
+         y = y * 10)
+
+
+all_union <- st_union(all_sf)
+#---- 2. Create a polygon that includes all points in projected coords ----
+# The simplest approach is to take the bounding box and convert to polygon.
+# In projected (27700) coordinates:
+poly_proj <- st_convex_hull(all_union)                     # bounding box in EPSG:27700                # create sfc polygon from bbox
+st_crs(poly_proj) <- 27700                       # set CRS to British National Grid
+
+# Also transform that polygon to lat/lon:
+poly_wgs84 <- st_transform(poly_proj, 4326)      # bounding polygon in WGS84
+
+#---- 3. Create a leaflet map (WGS84 version) ----
+#    Using WGS84 lat/lon points and polygons:
+leaflet() %>%
+  addProviderTiles("CartoDB.Positron") %>%
+  # Add Lung Cancer points (red)
+  addCircleMarkers(
+    data      = lung_sf_wgs84,
+    color     = "red",
+    radius    = 4,
+    stroke    = FALSE, fillOpacity = 0.8,
+    group     = "Lung Cancer"
+  ) %>%
+  # Add Larynx Cancer points (blue)
+  addCircleMarkers(
+    data      = larynx_sf_wgs84,
+    color     = "blue",
+    radius    = 4,
+    stroke    = FALSE, fillOpacity = 0.8,
+    group     = "Larynx Cancer"
+  ) %>%
+  # Add Incinerator point(s) (black)
+  addCircleMarkers(
+    data      = incin_sf_wgs84,
+    color     = "black",
+    radius    = 5,
+    stroke    = TRUE, fillOpacity = 1,
+    group     = "Incinerator"
+  ) %>%
+  # Add polygon window in WGS84 (semi-transparent)
+  addPolygons(
+    data        = poly_wgs84,
+    color       = "green",
+    fillColor   = "green",
+    fillOpacity = 0.1,
+    group       = "Polygon Window"
+  ) %>%
+  # Add a scale bar
+  addScaleBar(position = "bottomleft", options = scaleBarOptions()) %>%
+  # Add layers control
+  addLayersControl(
+    overlayGroups = c("Lung Cancer", "Larynx Cancer", "Incinerator", "Polygon Window"),
+    options = layersControlOptions(collapsed = FALSE)
+  )
+
+######################################
+# 1(c) Describe the patterns
+######################################
+# In your write-up (not code), discuss:
+#   - The general geographic location (i.e. county in England).
+#   - The spatial extent of the points (from the bounding polygon).
+#   - Whether you see any cluster or pattern for the cancer cases
+#     relative to the incinerator location, etc.
+
+```
+
+### 1(c)
+
+The general geographic location of data is at Leyland, Chorley and Penwortham. From the bounding box, the polygon “window” (the green box) encloses all observed points, spanning roughly 15–20 km in both the north–south and east–west directions
+
+-   Lung Cancer (red points): Their count is the largest and scattered throughout the whole domain. They are clustered around the centres of Leyland, Chorley and Penwortham
+
+-   Larynx Cancer (blue points): These points are fewer. There are less obvious clusters around the centres of Leyland, Chorley and Penwortham
+
+-   Incinerator (black point): There is only one incinerator, and it is situated near the southwestern boundary of the bounding window. At first glance, there is not any obvious pattern of cancer cases around the incinerator.
+
+## 2(b)
+
+### Setup
+
+```{r,message=F,warning=F,echo=FALSE}
+library(spatstat.geom)   
+library(spatstat.random)
+library(sf)
+library(sp)
+```
+
+### Homogeneous Poisson
+
+```{r,message=F,warning=F,echo=FALSE}
+N <- 1036
+poly_proj <- st_make_valid(poly_proj)  
+win <- as.owin(poly_proj)
+area_win <- area.owin(win)
+lambda   <- N / area_win    
+pp_hom   <- rpoispp(lambda, win=win)  # Homogeneous Poisson
+plot(pp_hom, main="Homogeneous Poisson with same number of cancers (1036)")
+```
+
+### Inhomogeneous Poisson
+
+```{r,message=F,warning=F,echo=FALSE}
+lamb1 <- function(x, y) { 10 * exp(-0.0001 * x + 0.00005 * y) }
+cancer_dens_chull <- convexhull.xy(x = all_sf$x, y = all_sf$y)
+# 2) Simulate the Inhomogeneous Poisson Process in 'win'
+library(spatstat.geom)
+# 1) Make intensity image
+lam_im  <- as.im(lamb1, W=cancer_dens_chull)
+# 2) Probability = lam_im / total integral
+total_lam <- integral(lam_im)
+prob_im   <- eval.im( lam_im / total_lam )
+# 3) Sample exactly, say, 2000 points
+sim_pp    <- rpoint(n=1036, f=prob_im, win=cancer_dens_chull)
+
+# 'win' is your spatstat window (owin) that encloses the region of interest
+#sim_pp<- as.points(sim_pp$x,sim_pp$y)
+plot(sim_pp,main="IPP, intensity(x,y)=10*exp(-0.0001*x+0.00005*y), with 1036 points",xlab='x',ylab='y')
+```
+
+### log-Gaussian Cox cluster
+
+```{r,message=F,warning=F,echo=FALSE}
+cancer_dens_chull <- convexhull.xy(x = all_sf$x, y = all_sf$y)
+cancer_ppp <- ppp(x = all_sf$x, y = all_sf$y, window = cancer_dens_chull)
+lgcp_mod1<-kppm(cancer_ppp, clusters="LGCP",method="mincon")
+plot(simulate(lgcp_mod1, drop = TRUE), main = "log-Gaussian Cox cluster with 1036 points")
+```
+
+### simple sequential inhibition process
+
+```{r,message=F,warning=F,echo=FALSE}
+r_value <- 250   # e.g., require 500 meters between points
+pp_ssi   <- rSSI(r=r_value, n=1036, win=win)
+
+plot(pp_ssi, main=paste("simple sequential inhibition processe with r=250 meters and 1036 points"))
+```
+
+### Assumption & Intensities
+
+#### Homogeneous Poisson
+
+-   **Assumption:** Points occur randomly and independently with a constant rate λ
+
+-   **Intensity:** λ(x,y) = constant.
+
+#### Inhomogeneous Poisson
+
+-   **Assumption:** Points still occur independently. The number of events in two non-overlapping regions are independent, regardless of differences in intensity.
+
+-   **Intensity:** λ(s) = $\hat{\lambda}(s) = \frac{1}{h^2} \sum_i \kappa\left(\frac{\|s - s_i\|}{h}\right) / q(\|s\|)$, a known function of location
+
+#### Log-Gaussian Cox Poisson
+
+-   **Assumptions:** Points are Poisson conditional on a latent Gaussian field Z(x), so the log-intensity is random and spatially correlated. Cox processes are considered doubly stochastic, intensity is heterogeneous, but also may be a random quantity
+
+-   **Intensity:** λ(x)=exp⁡(Z(x)). Often leads to clustering.
+
+#### Simple Sequential Inhibition (SSI)
+
+-   **Assumption:** Points are placed sequentially; each new point must be at least 'r' away from existing points.
+
+-   **Intensity:** No simple closed form
+
+## 3
+
+What is CRS:
+
+-   CRS means uniform distribution. Any location has equal probability of containing a point.
+
+-   CRS is modeled by a homogeneous Poisson process, with constant rate parameter.
+
+-   As for independence, the occurrence of one point does not have any influence on the likelihood of a point in another locations.
+
+-   Given that there are N points of the Poisson process in area A, these N points are conditionally independent and uniformly distributed in A
+
+### lung Cancer
+
+#### Ripley’s K-function with L function adjustment
+
+```{r,message=F,warning=F,echo=FALSE}
+# Ripley's K test, transformed to L for better visualization
+lung_cancer_dens_chull <- convexhull.xy(x = lung_sf$x, y = lung_sf$y)
+lung_ppp <- ppp(x = lung_sf$x, y = lung_sf$y, window = cancer_dens_chull)
+lung.pts<-as.points(lung_ppp$x,lung_ppp$y)
+
+
+K<-Kest(lung_ppp, correction="border")
+K_env<-envelope(lung_ppp, fun=Kest, nsim=99,correction = "border", savefuns = TRUE, verbose = FALSE)
+K_env_trans <- K_env
+K_env_trans$obs <- sqrt(K_env$obs / pi) - K_env$r
+K_env_trans$theo <- sqrt(K_env$theo / pi) - K_env$r
+K_env_trans$lo <- sqrt(K_env$lo / pi) - K_env$r
+K_env_trans$hi <- sqrt(K_env$hi / pi) - K_env$r
+plot(K_env_trans, . ~ r, main = "Transformed L-Function with Envelopes (CSR)_Lung Cancer", legend = FALSE)
+```
+
+As we can see, empirical values is a lot larger than our theoretical ones, and lie above and outside the envelope. This suggests a clustering pattern.
+
+#### G function
+
+```{r,message=F,warning=F,echo=FALSE}
+# G test: Nearest neighbor distribution test
+G_obs <- Gest(lung_ppp, correction = "rs")  
+G_env <- envelope(lung_ppp, fun = Gest, nsim = 99, correction = "rs", savefuns = TRUE, verbose = FALSE)
+plot(G_env, . ~ r, main = "G-Function with Envelopes (CSR)_Lung Cancer", legend = FALSE)
+```
+
+As we can see, empirical values is larger than our theoretical ones, and lie above and outside the envelope . This means there is clustering.
+
+### Larynx Cancer
+
+#### Ripley’s K-function with L function adjustment
+
+```{r,message=F,warning=F,echo=FALSE}
+# Ripley's K test, transformed to L for better visualization
+Larynx_cancer_dens_chull <- convexhull.xy(x = larynx_sf$x, y = larynx_sf$y)
+Larynx_ppp <- ppp(x = larynx_sf$x, y = larynx_sf$y, window = cancer_dens_chull)
+Larynx.pts<-as.points(Larynx_ppp$x,Larynx_ppp$y)
+
+K<-Kest(Larynx_ppp, correction="border")
+K_env1<-envelope(Larynx_ppp, fun=Kest, nsim=99,correction = "border", savefuns = TRUE, verbose = FALSE)
+K_env_trans1 <- K_env1
+K_env_trans1$obs <- sqrt(K_env1$obs / pi) - K_env1$r
+K_env_trans1$theo <- sqrt(K_env1$theo / pi) - K_env1$r
+K_env_trans1$lo <- sqrt(K_env1$lo / pi) - K_env1$r
+K_env_trans1$hi <- sqrt(K_env1$hi / pi) - K_env1$r
+plot(K_env_trans1, . ~ r, main = "Transformed L-Function with Envelopes (CSR)", legend = FALSE)
+```
+
+As we can see, empirical values is above our theoretical ones, and almost within the envelope. This suggest a relatively clustering pattern.
+
+#### G function
+
+```{r,message=F,warning=F,echo=FALSE}
+# G test: Nearest neighbor distribution test
+G_obs1 <- Gest(Larynx_ppp, correction = "rs")  
+G_env1 <- envelope(Larynx_ppp, fun = Gest, nsim = 99, correction = "rs", savefuns = TRUE, verbose = FALSE)
+plot(G_env1, . ~ r, main = "G-Function with Envelopes (CSR)_Larynx Cancer", legend = FALSE)
+```
+
+As we can see, empirical values is above our theoretical ones, and almost within the envelope. This suggest a relatively random pattern.
+
+### Comparison
+
+**Ripley’s K-function:**
+
+-   K(r) tests the expected number of events within distance h from an arbitrary event (excluding the chosen event itself) divided by the average number of events per unit area. K(r) = E(N0(r))/λ
+
+-   For a process that is more regular than CSR we expect fewer events within distance r of a randomly chosen event. For a process that is more clustered than CSR we expect more events within distance r of a randomly chosen event
+
+-   K(r) is equivalent to showing the variance of the number of events occurring in subregion A
+
+-   Under CSR K(r) = πr2, the area of a circle of radius r
+
+-   Deviations above the horizontal line indicate clustering because there are more events within distance h than expected. Deviations below the horizontal line indicate regularity because there are fewer events within distance h than expected.
+
+-   L version: plot $(h) \text{ vs } \hat{L}(h) - h \text{ where } \hat{L}(h) = \left(\frac{\hat{K}(h)_{ec}}{\pi}\right)^{1/2}$
+
+**G function:**
+
+-   measures the distribution of distances from an arbitrary event to its nearest event (i.e. uses nearest neighbor distances).
+-   Let G(r) = P(Di ≤ r), the CDF for the probability that the nearest neighbor distance is less than r
+-   Let ˆG(r) be the proportion of observed points with nearest neighbors less than r.
+-   Let hi be the distance from the ith event to the nearest other event in D, $\hat{G}(h) = \frac{\#(h_i \leq h)}{n}$
+-   If ˆG(r) is much greater than G(r), that means there is clustering, whereas if it is smaller that means there is regularity.
+
+## 4
+
+### Lung Cancer
+
+#### Quadratcount
+
+```{r,message=F,warning=F,echo=FALSE}
+lung_cancer_dens_chull <- convexhull.xy(x = lung_sf$x, y = lung_sf$y)
+lung_ppp <- ppp(x = lung_sf$x, y = lung_sf$y, window = cancer_dens_chull)
+lung.pts<-as.points(lung_ppp$x,lung_ppp$y)
+Q_lung <- quadratcount(lung_ppp, nx = 8, ny = 8)
+plot(lung.pts, cex = 1, pch="+", main="Lung Cancer in Quadrats", xlab="X",ylab="Y")
+plot(Q_lung, add = TRUE, cex = 1)
+```
+
+#### Quadrat.test
+
+```{r,message=F,warning=F,echo=FALSE}
+qt1 <- quadrat.test(Q_lung, alternative="two.sided", method="M")
+qt1
+```
+
+```{r,message=F,warning=F,echo=FALSE}
+qt2 <- quadrat.test(Q_lung, alternative="clustered", method="M")
+qt2
+```
+
+```{r,message=F,warning=F,echo=FALSE}
+qt3 <- quadrat.test(Q_lung, alternative="regular", method="M")
+qt3
+```
+
++--------------------+--------------------------------------------------------------------------------+--------------------------------------------------------------------------------------------------------------------------+----------------------------------------------------------------------------------------------------------------------------+
+|                    | Uniformly Distributed                                                          | Clustered                                                                                                                | Regular Psrocesses                                                                                                         |
++====================+================================================================================+==========================================================================================================================+============================================================================================================================+
+| **Result**         | X2 = 1854                                                                      | X2 = 1854                                                                                                                | X2 = 1854                                                                                                                  |
+|                    |                                                                                |                                                                                                                          |                                                                                                                            |
+|                    | p-value = 0.001                                                                | p-value = 5e-04                                                                                                          | p-value = 1                                                                                                                |
++--------------------+--------------------------------------------------------------------------------+--------------------------------------------------------------------------------------------------------------------------+----------------------------------------------------------------------------------------------------------------------------+
+| **Interpretation** | The null hypothesis, that points follow a uniform Poisson process is rejected. | The alternative hypothesis, that points follow a clustering pattern is proved. So there is significant clustered pattern | The alternative hypothesis, that points follow a regular pattern is not proved. So there is NO significant regular pattern |
++--------------------+--------------------------------------------------------------------------------+--------------------------------------------------------------------------------------------------------------------------+----------------------------------------------------------------------------------------------------------------------------+
+
+### Larynx Cancer
+
+#### Quadratcount
+
+```{r,message=F,warning=F,echo=FALSE}
+
+Larynx_cancer_dens_chull <- convexhull.xy(x = larynx_sf$x, y = larynx_sf$y)
+Larynx_ppp <- ppp(x = larynx_sf$x, y = larynx_sf$y, window = cancer_dens_chull)
+Larynx.pts<-as.points(Larynx_ppp$x,Larynx_ppp$y)
+Q_Larynx <- quadratcount(Larynx_ppp, nx = 8, ny = 8)
+plot(Larynx.pts, cex = 1, pch="+", main="Larynx Cancer in Quadrats", xlab="X (meters)",ylab="Y (meters)")
+plot(Q_Larynx, add = TRUE, cex = 1)
+```
+
+#### Quadrat.test
+
+```{r,message=F,warning=F,echo=FALSE}
+qt4 <- quadrat.test(Q_Larynx, alternative="two.sided", method="M")
+qt4
+```
+
+```{r,message=F,warning=F,echo=FALSE}
+qt5 <- quadrat.test(Q_Larynx, alternative="clustered", method="M")
+qt5
+```
+
+```{r,message=F,warning=F,echo=FALSE}
+qt6 <- quadrat.test(Q_Larynx, alternative="regular", method="M")
+qt6
+```
+
++--------------------+-------------------------------------------------------------------------------------------------------------+--------------------------------------------------------------------------------------------------------------------------+----------------------------------------------------------------------------------------------------------------------------+
+|                    | Uniformly Distributed                                                                                       | Clustered                                                                                                                | Regular Psrocesses                                                                                                         |
++====================+=============================================================================================================+==========================================================================================================================+============================================================================================================================+
+| **Result**         | X2 = 100.64                                                                                                 | X2 = 100.64                                                                                                              | X2 = 100.64                                                                                                                |
+|                    |                                                                                                             |                                                                                                                          |                                                                                                                            |
+|                    | p-value = 0.066                                                                                             | p-value = 0.0255                                                                                                         | p-value = 0.975                                                                                                            |
++--------------------+-------------------------------------------------------------------------------------------------------------+--------------------------------------------------------------------------------------------------------------------------+----------------------------------------------------------------------------------------------------------------------------+
+| **Interpretation** | The null hypothesis, that points follow a uniform Poisson process is rejected at significant level of 7.5%  | The alternative hypothesis, that points follow a clustering pattern is proved. So there is significant clustered pattern | The alternative hypothesis, that points follow a regular pattern is not proved. So there is no significant regular pattern |
++--------------------+-------------------------------------------------------------------------------------------------------------+--------------------------------------------------------------------------------------------------------------------------+----------------------------------------------------------------------------------------------------------------------------+
+
+## 5
+
+### lung Cancer
+
+At first, we need to know a Dirichlet tessellation is able to partition the plane so that each point’s “cell” includes all locations closer to it than to any other point. This can reveal how points partition their surrounding space.
+
+```{r,message=F,warning=F,echo=FALSE}
+plot(dirichlet(lung_ppp), main="Dirichlet Tesselation of lung cancer")
+```
+
+Large cells imply that point is relatively isolated; small cells imply a local cluster. there are several areas of many small cells, meaning clusters. These clusters of small cells match the statistical evidence of Quadrat.test, K-function, and G-function
+
+### larynx Cancer
+
+```{r,message=F,warning=F,echo=FALSE}
+
+Larynx_cancer_dens_chull <- convexhull.xy(x = larynx_sf$x, y = larynx_sf$y)
+Larynx_ppp <- ppp(x = larynx_sf$x, y = larynx_sf$y, window = cancer_dens_chull)
+plot(dirichlet(Larynx_ppp), main="Dirichlet Tesselation of larynx cancer")
+```
+
+There are no strong evidence of concentration areas of many small cells. This result match with result of K-function and G-function, which indicate weaker or minimal clustering relative to lung cancer. However, this result does NOT align with the Quadrat.test result. One potentail reason is that Quadrat.test is more statistically rigorous, while Dirichlet Tesselation relies on eyeballing.
+
+## 6
+
+### lung cancer
+
+```{r,message=F,warning=F,echo=FALSE}
+optim_bw_lung<-bw.diggle(lung_ppp, edge="border")
+ds_lung <- density.ppp(lung_ppp, sigma=optim_bw_lung)
+plot(ds_lung, main = "Lung cancer density")
+plot(lung_ppp, add = TRUE, cols = "white", cex = 0.1, pch = 16)
+```
+
+There are a few hot spots, indicating the local maxima of the kernel density. These hot spots represents the region with a relatively higher concentration of lung cancer cases, in other words, clustering. This results align with the results of K-function, G-function, and Quadrat.test.
+
+```{r,message=F,warning=F,echo=FALSE}
+range(ds_lung)
+```
+
+The maximum and minimum values of the intensity estimate over the study region is -3.0156e-20 to 3.0859e-04. The large difference between maximum and minimum indicates the existence of clustering
+
+```{r,message=F,warning=F,echo=FALSE}
+optim_bw_lung
+summary(ds_lung)
+```
+
+The optimal bandwidth is 72.77397, and 4.2895e-06 is the average intensity (points per square unit) inside the window. The value integral(973.8974) is approximately equal to the number of lung cancers, which means correct implementation.
+
+### larynx cancer
+
+```{r,message=F,warning=F,echo=FALSE}
+optim_bw_larynx<-bw.diggle(Larynx_ppp, edge="border")
+ds_larynx <- density.ppp(Larynx_ppp, sigma=optim_bw_larynx)
+plot(ds_larynx, main = "Larynx cancer density")
+plot(Larynx_ppp, add = TRUE, cols = "white", cex = 0.1, pch = 16)
+```
+
+There are a few hot spots, indicating the local maxima of the kernel density. These hot spots represents the region with a relatively higher concentration of larynx cancer cases, in other words, clustering. This results align with the results of K-function, G-function, and Quadrat.test.
+
+```{r,message=F,warning=F,echo=FALSE}
+range(ds_larynx)
+```
+
+The maximum and minimum values of the intensity estimate over the study region is 0.00 to 1.8103e-06. The large difference between maximum and minimum indicates the existence of clustering
+
+```{r,message=F,warning=F,echo=FALSE}
+optim_bw_larynx
+summary(ds_larynx)
+```
+
+The optimal bandwidth is 642.1233, and 2.5810e-07 is the average intensity (points per square unit) inside the window. Also, the value integral(58.59965) is approximately equal to the number of lung cancers, which means correct implementation.
+
+## 7
+
+### Lung Cancer
+
+a)  **no covariates**
+
+```{r,message=F,warning=F,echo=FALSE}
+food_fit1_lung<-ppm(lung_ppp~1,Poisson())
+summary(food_fit1_lung)
+coef(food_fit1_lung)
+plot(food_fit1_lung) # this plots the density (nothing when it is constant)
+AIC(food_fit1_lung)
+```
+
+-   Since the intensity is constant, the homogeneous Poisson point possess is being fit.
+
+-   The uniform intensity is 4.30e-06, meaning you expect 4.30e-06 lung cancer cases per unit area
+
+-   AIC is 26124.15
+
+b)  **linear trend**
+
+```{r,message=F,warning=F,echo=FALSE}
+# Fit a model with dependence on x
+food_fit2_lung<-ppm(lung_ppp,~log(x)+log(y), Poisson())
+summary(food_fit2_lung)
+coef(food_fit2_lung)
+AIC(food_fit2_lung)
+```
+
+-   $\lambda(x, y)$ is modeled as $\beta_0 + \beta_1 \cdot x + \beta_2 \cdot y$. This is an inhomogeneous Poisson process with a linear intensity in terms of $x$ and $y$.
+
+-   AIC is 26118.86
+
+-   Only 'X' shows a significant Ztest, meaning spatial intensity is significantly related to the X-direction.
+
+c)  **a covariate that represents the distance to the incinerator**
+
+```{r,message=F,warning=F,echo=FALSE}
+xi <- incin_sf$x
+yi <- incin_sf$y
+
+# 
+r <- 20  # 2 km
+incin_win <- owin(
+  xrange = c(xi - r, xi + r),
+  yrange = c(yi - r, yi + r)
+)
+
+# Then the ppp object:
+incin_ppp <- ppp(x = xi, y = yi, window = incin_win)
+
+incin_dist <- distfun(incin_ppp)
+food_fit3_lung<-ppm(lung_ppp,~incin_dist, Poisson())
+summary(food_fit3_lung)
+coef(food_fit3_lung)
+#plot(food_fit3_lung) # this plots the density
+AIC(food_fit3_lung)
+```
+
+Since incinerator is a single point, we need to create a square window from (xi - r, yi - r) to (xi + r, yi + r), where r is 20 meters. In this way, we can approximate a polygon.
+
+-   Here, $\lambda(x, y)$ is modeled as $\exp(\beta_0 + \beta_1 \cdot \text{dist_to_incin}(x, y))$.
+
+-   This is an inhomogeneous Poisson model.
+
+-   The parameter estimate is -1.453328e-05, but is NOT statistically significant. There is no strong evidence that intensity will increase or decrease with distance. In other words, it suggests the distance from the incinerator does not affect the intensity of lung cancers.
+
+### Larynx Cancer
+
+a)  no covariates
+
+```{r,message=F,warning=F,echo=FALSE}
+food_fit1_larynx<-ppm(Larynx_ppp~1,Poisson())
+summary(food_fit1_larynx)
+coef(food_fit1_larynx)
+plot(food_fit1_larynx) # this plots the density (nothing when it is constant)
+AIC(food_fit1_larynx)
+```
+
+-   Since the intensity is constant, the homogeneous Poisson point possess is being fit.
+
+-   The uniform intensity is 2.55e-07, meaning you expect 2.55e-07 lung cancer cases per unit area
+
+-   AIC is 1878.874
+
+b)  **linear trend**
+
+```{r,message=F,warning=F,echo=FALSE}
+# Fit a model with dependence on x
+food_fit2_larynx<-ppm(Larynx_ppp,~log(x)+log(y), Poisson())
+summary(food_fit2_larynx)
+coef(food_fit2_larynx)
+AIC(food_fit2_larynx)
+```
+
+-   $\lambda(x, y)$ is modeled as $\beta_0 + \beta_1 \cdot x + \beta_2 \cdot y$. This is an inhomogeneous Poisson process with a linear intensity in terms of $x$ and $y$.
+
+-   AIC is 1879.827
+
+-   No covariate shows a significant Ztest, meaning spatial intensity is NOT significantly related to both the X-direction and Y-direction.
+
+c)  **a covariate that represents the distance to the incinerator**
+
+```{r,message=F,warning=F,echo=FALSE}
+xi <- incin_sf$x
+yi <- incin_sf$y
+
+# 
+r <- 20  # 2 km
+incin_win <- owin(
+  xrange = c(xi - r, xi + r),
+  yrange = c(yi - r, yi + r)
+)
+
+# Then the ppp object:
+incin_ppp <- ppp(x = xi, y = yi, window = incin_win)
+
+incin_dist <- distfun(incin_ppp)
+food_fit3_larynx<-ppm(Larynx_ppp,~incin_dist, Poisson())
+summary(food_fit3_larynx)
+coef(food_fit3_larynx)
+#plot(food_fit3_lung) # this plots the density
+AIC(food_fit3_larynx)
+```
+
+Similarly, since incinerator is a single point, we need to create a square window from (xi - r, yi - r) to (xi + r, yi + r), where r is 20 meters. In this way, we can approximate a polygon.
+
+-   Here, $\lambda(x, y)$ is modeled as $\exp(\beta_0 + \beta_1 \cdot \text{dist_to_incin}(x, y))$.
+
+-   This is an inhomogeneous Poisson model.
+
+-   The parameter estimate is -0.000038, but is NOT statistically significant. There is no strong evidence that intensity will increase or decrease with distance. In other words, it suggests the distance from the incinerator does not affect the intensity of larynx cancers.
+
+## 8
+
+### lung Cancer
+
+```{r,message=F,warning=F,echo=FALSE}
+lgcp_mod1<-kppm(lung_ppp, clusters="LGCP",method="mincon")
+summary(lgcp_mod1)
+plot(lgcp_mod1) # is this on residuals?
+plot(envelope(lgcp_mod1, Gest, nsim = 39, global = TRUE))
+```
+
+-   From the plot of K-functions, we can see the observed K(r) (red line) is above the theoretical K(r) (green line), meaning there is clustering.
+
+-   From the plot of G-functions, we can see observed G(r) is above the theoretical G(r), meaning the point pattern is clustering.
+
+-   The result align with previous results
+
+-   The Mean log‐intensity is −13.6209
+
+-   A non‐zero variance(2.53) indicates that some locations have much higher log‐intensity than others, in other words, clusters exists.
+
+```{r,message=F,warning=F,echo=FALSE}
+XX <- simulate(lgcp_mod1, nsim = 11)
+XX[[12]] <- lung_ppp
+plot(XX, main = "", main.panel = "")
+```
+
+### Larynx Cancer
+
+```{r,message=F,warning=F,echo=FALSE}
+lgcp_mod2<-kppm(Larynx_ppp, clusters="LGCP",method="mincon")
+summary(lgcp_mod2)
+plot(lgcp_mod2) # is this on residuals?
+plot(envelope(lgcp_mod2, Gest, nsim = 39, global = TRUE))
+```
+
+-   From the plot of K-functions, we can see the observed K(r) (red line) is above, but very close to theoretical K(r) (green line), meaning there is a little bit clustering. The point pattern is mainly random.
+
+-   From the plot of G-functions, we can see observed G(r) is very close to theoretical G(r), meaning the point pattern is mainly random.
+
+-   The result align with previous results
+
+-   The Mean log‐intensity is −16.18
+
+-   A non‐zero variance(2.011) indicates that some locations have much higher log‐intensity than others, in other words, clusters exists.
+
+```{r,message=F,warning=F,echo=FALSE}
+XX <- simulate(lgcp_mod2, nsim = 10)
+XX[[10]] <- Larynx_ppp
+plot(XX, main = "", main.panel = "")
+```
+
+## 9
+
+```{r,message=F,warning=F,echo=FALSE}
+library(dbscan)
+```
+
+### a
+
+when minPts = 3 and eps = 2km
+
+```{r,message=F,warning=F,echo=FALSE}
+lung_ppp <- ppp(x = lung_sf$x, y = lung_sf$y, window = cancer_dens_chull)
+lung_ppp_pts<-as.points(lung_ppp$x,lung_ppp$y)
+db.clust_32 = dbscan(lung_ppp_pts, minPts = 3, eps=2000) # what is epsilon (units?)
+db.clust_32
+hullplot(lung_ppp_pts,db.clust_32)
+```
+
+when minPts = 3 and eps = 0.5km
+
+```{r,message=F,warning=F,echo=FALSE}
+lung_ppp_pts<-as.points(lung_ppp$x,lung_ppp$y)
+db.clust_305 = dbscan(lung_ppp_pts, minPts = 3, eps=500) # what is epsilon (units?)
+db.clust_305
+hullplot(lung_ppp_pts,db.clust_305)
+```
+
++------------------------+----------------------------------------------------------------------------------------------------------------------------+-----------------------------------------------------------------------------------------------+
+|                        | minPts = 3 and eps = 2km                                                                                                   | minPts = 3 and eps = 0.5km                                                                    |
++========================+============================================================================================================================+===============================================================================================+
+| Result                 | All points into one cluster except two points. The chosen parameters considered most points to be part of one big polygon. | There are more clusters, capturing more local clusters rather than forcing one giant cluster. |
++------------------------+----------------------------------------------------------------------------------------------------------------------------+-----------------------------------------------------------------------------------------------+
+| Number of clusters     | 1                                                                                                                          | 21                                                                                            |
++------------------------+----------------------------------------------------------------------------------------------------------------------------+-----------------------------------------------------------------------------------------------+
+| Number of noise points | 2                                                                                                                          | 76                                                                                            |
++------------------------+----------------------------------------------------------------------------------------------------------------------------+-----------------------------------------------------------------------------------------------+
+
+The number of clusters can be very different when eps is very different. Tuning this parameter can leading to different results and interpretation, so that more patterns can be discovered and analyzed.
+
+### b
+
+```{r,message=F,warning=F,echo=FALSE}
+hdb.clust = hdbscan(lung_ppp_pts, minPts = 3)
+hdb.clust
+#par(mfrow=c(1,2))
+hullplot(lung_ppp_pts,hdb.clust)
+
+# cluster membership assignment for each
+#hdb.clust$cluster
+# cluster membership probability of each
+#hdb.clust$membership_prob
+# outlier score for each point, *not* complement of membership scor
+#hdb.clust$outlier_scores
+# cluster score for each *cluster*
+
+#hdb.clust$cluster_scores
+
+# plot hierarchical tree
+plot(hdb.clust)
+plot(hdb.clust, show_flat = TRUE)
+```
+
+-   32 clusters and 55 noise points
+
+-    Instead of a fixed eps, HDBSCAN can use multiple values of eps and builds a hierarchical tree. This can reveal clusters at different density levels.
+
+-   From the hierarchical tree, we can see: at small eps levels, there are more clusters. As you increases eps, some clusters merge into larger clusters.
+
+-   By HDBSCAN, different regions of the domain can end up split or merged at different values of eps. So the the final clusters can be seen as forming at locally appropriate density levels.

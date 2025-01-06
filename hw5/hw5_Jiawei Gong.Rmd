@@ -1,0 +1,213 @@
+---
+title: "STA465 Project Plan"
+author: "Jiawei Gong"
+date: "11/8/2024"
+output:
+  pdf_document: default
+  html_document: default
+editor_options: 
+  markdown: 
+    wrap: sentence
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Setup
+```{r}
+larynx <- read.table("/Users/davegong/Desktop/year4 fall/sta465/hw5/pp-data/larynx.txt",header=TRUE) 
+lung <- read.table("/Users/davegong/Desktop/year4 fall/sta465/hw5/pp-data/lung.txt",header=TRUE)
+incinerator <- read.table("/Users/davegong/Desktop/year4 fall/sta465/hw5/pp-data/incinerator.txt",header=TRUE)
+
+library(sf)        
+library(dplyr)     
+library(leaflet)   
+library(leafem)
+```
+
+
+# Q1(a)
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+lung <- lung %>%
+  mutate(x = x * 10,
+         y = y * 10)
+
+larynx <- larynx %>%
+  mutate(x = x * 10,
+         y = y * 10)
+
+incinerator <- incinerator %>%
+  mutate(x = x * 10,
+         y = y * 10)
+
+
+lung_sf <- st_as_sf(lung, coords = c("x", "y"), crs = 27700)
+larynx_sf <- st_as_sf(larynx, coords = c("x", "y"), crs = 27700)
+incinerator_sf <- st_as_sf(incinerator, coords = c("x", "y"), crs = 27700)
+
+lung_latlon <- st_transform(lung_sf, crs = 27700)
+larynx_latlon <- st_transform(larynx_sf, crs = 27700)
+incinerator_latlon <- st_transform(incinerator_sf, crs = 27700)
+
+lung_coords <- st_coordinates(lung_latlon)
+larynx_coords <- st_coordinates(larynx_latlon)
+incinerator_coords <- st_coordinates(incinerator_latlon)
+
+#dropping geometry
+lung_final <- lung %>%
+  mutate(longitude = lung_coords[,1],
+         latitude = lung_coords[,2],
+         type = "Lung Cancer") %>%
+  st_drop_geometry()
+
+larynx_final <- larynx %>%
+  mutate(longitude = larynx_coords[,1],
+         latitude = larynx_coords[,2],
+         type = "Larynx Cancer") %>%
+  st_drop_geometry()
+
+incinerator_final <- incinerator %>%
+  mutate(longitude = incinerator_coords[,1],
+         latitude = incinerator_coords[,2],
+         type = "Incinerator") %>%
+  st_drop_geometry()
+
+
+cat("Lung Cancer Cases:\n")
+print(head(lung_final))
+
+cat("\nLarynx Cancer Cases:\n")
+print(head(larynx_final))
+
+cat("\nIncinerator Location:\n")
+print(head(incinerator_final))
+
+
+# show the number of cases
+num_lung_cases <- nrow(lung_final)
+num_larynx_cases <- nrow(larynx_final)
+
+cat("\nNumber of Lung Cancer Cases:", num_lung_cases, "\n")
+cat("Number of Larynx Cancer Cases:", num_larynx_cases, "\n")
+
+```
+# Q1(b)
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+combined_data <- bind_rows(lung_final, larynx_final, incinerator_final)
+
+
+lung_projected <- lung_final %>%
+  select(x, y, type)
+
+larynx_projected <- larynx_final %>%
+  select(x, y, type)
+
+incinerator_projected <- incinerator_final %>%
+  select(x, y, type)
+
+
+
+
+combined_projected <- bind_rows(lung_projected, larynx_projected, incinerator_projected) %>%
+  st_as_sf(coords = c("x", "y"), crs = 27700)
+
+polygon_projected <- combined_projected %>%
+  st_union() %>%           
+  st_convex_hull()   
+```
+
+```{r}
+# 7.2.1. Convert combined_data to sf object with CRS 4326
+combined_latlon_sf <- combined_data %>%
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326)
+
+# 7.2.2. Create Convex Hull Polygon in Lat/Lon CRS
+polygon_latlon <- combined_latlon_sf %>%
+  st_union() %>%           # Combine all points into a single geometry
+  st_convex_hull()         # Create the smallest convex polygon enclosing all points
+
+```
+
+```{r}
+# 8.1. Define Colors for Each Type
+type_colors <- c("Lung Cancer" = "red",
+                 "Larynx Cancer" = "green",
+                 "Incinerator" = "blue")
+
+# 8.2. Initialize Leaflet Map
+leaflet_map <- leaflet() %>%
+  addTiles()  
+
+combined_latlon_sf_lung = filter(combined_latlon_sf, type=='Lung Cancer')
+combined_latlon_sf_larynx = filter(combined_latlon_sf, type=='Larynx Cancer') 
+combined_latlon_incinerator = filter(combined_latlon_sf, type=='Incinerator') 
+
+
+# 8.3. Add Points with Different Colors Based on Type
+leaflet_map <- leaflet_map %>%
+  addCircleMarkers(data = combined_latlon_sf_lung,
+                 color = 'red',
+                 radius = 5,
+                 fillOpacity = 0.8,
+                 label = ~type,
+                 popup = ~paste("Type:", type))%>%
+  addCircleMarkers(data = combined_latlon_sf_larynx,
+                 color = 'green',
+                 radius = 5,
+                 fillOpacity = 0.8,
+                 label = ~type,
+                 popup = ~paste("Type:", type))%>%
+  addCircleMarkers(data = combined_latlon_incinerator,
+                 color = 'blue',
+                 radius = 5,
+                 fillOpacity = 0.8,
+                 label = ~type,
+                 popup = ~paste("Type:", type))
+  
+
+
+
+# 8.4. Add Polygon Windows
+# Add Projected Polygon (transformed to lat/lon for Leaflet)
+polygon_projected_latlon <- st_transform(polygon_projected, crs = 4326)
+
+leaflet_map <- leaflet_map %>%
+  addPolygons(data = polygon_latlon,
+              color = "purple",
+              weight = 2,
+              fill = FALSE,
+              opacity = 0.7,
+              label = "Lat/Lon Polygon") %>%
+  addPolygons(data = polygon_projected_latlon,
+              color = "orange",
+              weight = 2,
+              fill = FALSE,
+              opacity = 0.7,
+              label = "Projected Polygon")%>%
+  addLayersControl(
+    overlayGroups = c("Lat/Lon Polygon", "Projected Polygon"),
+    options = layersControlOptions(collapsed = FALSE)
+)
+
+# Add Scale Bar
+leaflet_map <- leaflet_map %>%
+  addScaleBar(position = "bottomleft")
+
+# Add Legend
+leaflet_map <- leaflet_map %>%
+  addLegend(
+    "topright", 
+    colors = type_colors, 
+    labels = names(type_colors),
+    title = "Point Types",
+    opacity = 1
+  )
+
+# Display the Leaflet Map
+leaflet_map
+```
+# 1(c)
+
+
