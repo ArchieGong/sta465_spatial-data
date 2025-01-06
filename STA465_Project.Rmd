@@ -529,3 +529,425 @@ They all use WGS84 datum.
 <https://open.toronto.ca/dataset/topographic-mapping-poles/>
 
 <https://open.toronto.ca/dataset/red-light-cameras/>
+
+
+
+
+
+```{r}
+
+collision_in_each_neighbour = neighborhood_collision %>% as_tibble() %>% 
+  group_by(Neighbourh) %>%
+  summarise(collision_number=n())
+
+neighborhoods_data <- neighborhoods_data %>%
+  left_join(collision_in_each_neighbour, by = "Neighbourh")
+
+
+pal_var1 <- colorNumeric("YlGnBu", neighborhoods_data$collision_number, n = 10)
+
+leaflet(data = neighborhoods_data) %>%
+  addProviderTiles("CartoDB.Positron") %>%
+  addPolygons(fillColor = ~pal_var1(neighborhoods_data$collision_number), color = "#BDBDC3", weight = 1,
+              fillOpacity = 0.7, smoothFactor = 0.5,
+              label = ~paste0(Neighbourh, ": collision counts: ", neighborhoods_data$collision_number)) %>%
+  addLegend(
+    pal = pal_var1,
+    values = ~collision_number,
+    title = "collision counts in each neighbor",
+    position = "bottomright"
+  )
+```
+
+```{r}
+
+neighborhoods_data  <- st_read(paste0(data.dir, "/Toronto_Neighbourhoods/Toronto_Neighbourhoods.shp"))
+camera_in_each_neighbour = neighborhood_camera %>% as_tibble() %>% 
+  group_by(Neighbourh) %>%
+  summarise(camera_number=n())
+
+neighborhoods_data <- neighborhoods_data %>%
+  left_join(camera_in_each_neighbour, by = "Neighbourh")
+
+pal_var1 <- colorNumeric("YlGnBu", neighborhoods_data$camera_number, n = 10)
+
+leaflet(data = neighborhoods_data) %>%
+  addProviderTiles("CartoDB.Positron") %>%
+  addPolygons(fillColor = ~pal_var1(neighborhoods_data$camera_number), color = "#BDBDC3", weight = 1,
+              fillOpacity = 0.7, smoothFactor = 0.5,
+              label = ~paste0(Neighbourh, ": Camera counts: ", neighborhoods_data$camera_number)) %>%
+  addLegend(
+    pal = pal_var1,
+    values = ~camera_number,
+    title = "Traffic Camera counts in each neighbor",
+    position = "bottomright"
+  )
+```
+
+```{r}
+
+light_in_each_neighbour = neighborhood_light %>% as_tibble() %>% 
+  group_by(Neighbourh) %>%
+  summarise(light_pole_number=n())
+
+neighborhoods_data <- neighborhoods_data %>%
+  left_join(light_in_each_neighbour, by = "Neighbourh")
+
+pal_var1 <- colorNumeric("YlGnBu", neighborhoods_data$light_pole_number, n = 10)
+
+leaflet(data = neighborhoods_data) %>%
+  addProviderTiles("CartoDB.Positron") %>%
+  addPolygons(fillColor = ~pal_var1(neighborhoods_data$light_pole_number), color = "#BDBDC3", weight = 1,
+              fillOpacity = 0.7, smoothFactor = 0.5,
+              label = ~paste0(Neighbourh, ": Light Pole counts: ", neighborhoods_data$light_pole_number)) %>%
+  addLegend(
+    pal = pal_var1,
+    values = ~light_pole_number,
+    title = "Light Pole counts in each neighbor",
+    position = "bottomright"
+  )
+```
+
+```{r}
+signal_in_each_neighbour <- neighborhood_signal %>%
+  as_tibble() %>%
+  group_by(Neighbourh) %>%
+  summarise(signal_pole_number = n())
+
+neighborhoods_data <- neighborhoods_data %>%
+  left_join(signal_in_each_neighbour, by = "Neighbourh")
+
+pal_var1 <- colorNumeric("YlGnBu", neighborhoods_data$signal_pole_number, n = 10)
+
+leaflet(data = neighborhoods_data) %>%
+  addProviderTiles("CartoDB.Positron") %>%
+  addPolygons(fillColor = ~pal_var1(neighborhoods_data$signal_pole_number), color = "#BDBDC3", weight = 1,
+              fillOpacity = 0.7, smoothFactor = 0.5,
+              label = ~paste0(Neighbourh, ": signal Pole counts: ", neighborhoods_data$signal_pole_number)) %>%
+  addLegend(
+    pal = pal_var1,
+    values = ~signal_pole_number,
+    title = "Traffic Signal Pole counts in each neighbor",
+    position = "bottomright"
+  )
+```
+
+```{r}
+neighborhoods_data  <- st_read(paste0(data.dir, "/Toronto_Neighbourhoods/Toronto_Neighbourhoods.shp"))
+calming_in_each_neighbour <- summarize(
+  group_by(
+    as_tibble(neighborhood_calming),
+    Neighbourh
+  ),
+  total_speed_cushion = sum(spd_cush, na.rm = TRUE),
+  total_speed_hump = sum(spd_hump, na.rm = TRUE),
+  total_traffic_island = sum(traf_islan, na.rm = TRUE),
+  total_calming = sum(spd_cush, na.rm = TRUE) + sum(spd_hump, na.rm = TRUE) + sum(traf_islan, na.rm = TRUE)
+)
+
+
+neighborhoods_data <- neighborhoods_data %>%
+  left_join(calming_in_each_neighbour, by = "Neighbourh")
+
+pal_var1 <- colorNumeric("YlGnBu", neighborhoods_data$total_calming, n = 10)
+
+leaflet(data = neighborhoods_data) %>%
+  addProviderTiles("CartoDB.Positron") %>%
+  addPolygons(fillColor = ~pal_var1(neighborhoods_data$total_calming), color = "#BDBDC3", weight = 1,
+              fillOpacity = 0.7, smoothFactor = 0.5,
+              label = ~paste0(Neighbourh, ": signal Pole counts: ", neighborhoods_data$total_calming)) %>%
+  addLegend(
+    pal = pal_var1,
+    values = ~total_calming,
+    title = "Traffic calming devices counts in each neighbor",
+    position = "bottomright"
+  )
+
+```
+
+```{r}
+neighborhoods_data  <- st_read(paste0(data.dir, "/Toronto_Neighbourhoods/Toronto_Neighbourhoods.shp"))
+neighborhoods_data <- st_transform(neighborhoods_data, crs = 4326)
+
+
+redlight_camera_in_each_neighbour = neighborhood_redlight_camera %>% as_tibble() %>% 
+  group_by(Neighbourh) %>%
+  summarise(redlight_camera_number=n())
+
+neighborhoods_data <- neighborhoods_data %>%
+  left_join(redlight_camera_in_each_neighbour, by = "Neighbourh")
+
+pal_var1 <- colorNumeric("YlGnBu", neighborhoods_data$redlight_camera_number, n = 10)
+
+leaflet(data = neighborhoods_data) %>%
+  addProviderTiles("CartoDB.Positron") %>%
+  addPolygons(fillColor = ~pal_var1(neighborhoods_data$redlight_camera_number), color = "#BDBDC3", weight = 1,
+              fillOpacity = 0.7, smoothFactor = 0.5,
+              label = ~paste0(Neighbourh, ": signal Pole counts: ", neighborhoods_data$redlight_camera_number)) %>%
+  addLegend(
+    pal = pal_var1,
+    values = ~redlight_camera_number,
+    title = "Red light Camera counts in each neighbor",
+    position = "bottomright"
+  )
+```
+
+
+
+
+
+
+
+
+```{r}
+library(tidyverse)
+library(leaflet) 
+library(sf)
+library(units)
+library(spdep)
+library(spData) # for SIDS spatial data
+library(spatialreg) # for SAR and CAR
+library(spgwr) # for GWR
+library(spaMM) 
+```
+
+
+```{r}
+neighborhoods_data  <- st_read(paste0(data.dir, "/Toronto_Neighbourhoods/Toronto_Neighbourhoods.shp"))
+neighborhoods_data <- st_transform(neighborhoods_data, crs = 4326)
+
+collision_in_each_neighbour = neighborhood_collision %>% as_tibble() %>% 
+  group_by(Neighbourh) %>%
+  summarise(collision_number=n())
+
+neighborhoods_data <- neighborhoods_data %>%
+  left_join(collision_in_each_neighbour, by = "Neighbourh")
+```
+
+
+```{r}
+#6NN weight matrix
+nc_centroids <- st_centroid(neighborhoods_data)
+coords <- st_coordinates(nc_centroids)
+sids_kn6<-knn2nb(knearneigh(coords, k=6))
+sids_kn6_w<-nb2listw(sids_kn6, style="W")
+summary(unlist(sids_kn6_w$weights))
+
+
+
+moran_collision_mc_6nn<- moran.mc(neighborhoods_data$collision_number,
+                        sids_kn6_w, nsim=9999, alternative="two.sided") 
+moran_collision_mc_6nn
+
+moran_collision_mc_6nn$statistic
+moran_collision_mc_6nn$p.value
+distr999<- hist(moran_collision_mc_6nn$res,freq=TRUE,col="light blue",main="Permutation Test for Moran's I - 9999 permutations with 6NN connectivity",breaks=75)
+lines(moran_collision_mc_6nn$statistic,max(distr999$counts),type="h",col="red",lwd=2)
+
+```
+
+
+```{r}
+#Queen weight matrix
+sids_nb_queen<-poly2nb(neighborhoods_data, queen=TRUE)
+sids_queen_w<-nb2listw(sids_nb_queen, style="W")
+summary(unlist(sids_queen_w$weights))
+
+#Choose Queen Weight Matrix
+moran_collision_mc_queen<- moran.mc(neighborhoods_data$collision_number,
+                        sids_queen_w, nsim=9999, alternative="two.sided") 
+moran_collision_mc_queen
+
+moran_collision_mc_queen$statistic
+moran_collision_mc_queen$p.value
+distr999<- hist(moran_collision_mc_queen$res,freq=TRUE,col="light blue",main="Permutation Test for Moran's I - 9999 permutations with Queen connectivity",breaks=75)
+lines(moran_collision_mc_queen$statistic,max(distr999$counts),type="h",col="red",lwd=2)
+```
+
+
+
+```{r}
+#Binary
+sids_kn1<-knn2nb(knearneigh(coords, k=3))
+# inverse distance weighted weights
+dists<-nbdists(sids_kn1, coords)
+# inverse distance weighted weights
+idw <- lapply(dists, function(x) 1/(x^2))
+sids_idw_dist_w_binary <- nb2listw(sids_kn1, glist = idw, style ="W")
+summary(unlist(sids_idw_dist_w_binary$weights))
+
+
+
+moran_collision_mc_queen<- moran.mc(neighborhoods_data$collision_number,
+                        sids_idw_dist_w_binary, nsim=9999, alternative="two.sided") 
+moran_collision_mc_queen
+
+moran_collision_mc_queen$statistic
+moran_collision_mc_queen$p.value
+distr999<- hist(moran_collision_mc_queen$res,freq=TRUE,col="light blue",main="Permutation Test for Moran's I - 9999 permutations with Inverse Distance",breaks=75)
+lines(moran_collision_mc_queen$statistic,max(distr999$counts),type="h",col="red",lwd=2)
+```
+
+
+
+```{r}
+#Queen lag
+corrneigh_queen<-sp.correlogram(sids_nb_queen, neighborhoods_data$collision_number, order=10, method="I", style="W", randomisation=T, zero.policy=TRUE)
+print(corrneigh_queen)
+plot(corrneigh_queen,main="Moran's I for collision counts, Queen Lags")
+```
+
+
+
+
+
+
+```{r}
+collision_number = neighborhoods_data$collision_number
+
+moranLoc_TTC_prop<-localmoran(collision_number,sids_queen_w, alternative="two.sided")
+
+attributes(moranLoc_TTC_prop)$quadr$mean
+
+neighborhoods_data$Ii <- moranLoc_TTC_prop[, 1]       
+neighborhoods_data$Z.Ii <- moranLoc_TTC_prop[, 4]    
+neighborhoods_data$p.value <- p.adjust(moranLoc_TTC_prop[, 5],method="none")
+hist(neighborhoods_data$p.value)
+
+neighborhoods_data$significant = neighborhoods_data$p.value<=0.05
+
+clust.pal <- colorFactor(palette = c("blue", "lightblue", "lightpink","red"),
+                  domain=attributes(moranLoc_TTC_prop)$quadr$mean)
+sig.pal = colorFactor(c('green','yellow'), levels=c("TRUE","FALSE"))
+
+leaflet(neighborhoods_data) %>%
+  addProviderTiles('CartoDB.Positron') %>%
+ 
+  addPolygons(fillColor = ~clust.pal(attributes(moranLoc_TTC_prop)$quadr$mean), 
+              color = "black", weight = 1, opacity = 1, fillOpacity = 0.7,
+              label = ~paste0("Local Moran I: ", round(Ii,2), " ,Neighbourh: ", Neighbourh, " ,Collision Counts: ", collision_number),
+              highlightOptions = highlightOptions(weight = 2, color = "white", fillOpacity = 0.9)) %>%
+  addPolygons(color = ~sig.pal(significant), fill=F, weight=2)%>%
+  leaflet::addLegend(pal = clust.pal, values = ~attributes(moranLoc_TTC_prop)$quadr$mean, title = "Local Moran's I", opacity = 0.7)
+```
+
+
+
+```{r}
+library(tidyverse)
+library(leaflet) 
+library(sf)
+library(units)
+library(spdep)
+library(spData) # for SIDS spatial data
+library(spatialreg) # for SAR and CAR
+library(spgwr) # for GWR
+library(spaMM) 
+```
+
+
+```{r}
+
+neighborhoods_data  <- st_read(paste0(data.dir, "/Toronto_Neighbourhoods/Toronto_Neighbourhoods.shp"))
+neighborhoods_data <- st_transform(neighborhoods_data, crs = 4326)
+
+collision_in_each_neighbour = neighborhood_collision %>% as_tibble() %>% 
+  group_by(Neighbourh) %>%
+  summarise(collision_number=n())
+
+neighborhoods_data <- neighborhoods_data %>%
+  left_join(collision_in_each_neighbour, by = "Neighbourh")
+
+
+
+redlight_camera_in_each_neighbour = neighborhood_redlight_camera %>% as_tibble() %>% 
+  group_by(Neighbourh) %>%
+  summarise(redlight_camera_number=n())
+
+neighborhoods_data <- neighborhoods_data %>%
+  left_join(redlight_camera_in_each_neighbour, by = "Neighbourh")
+
+
+
+
+
+calming_in_each_neighbour <- summarize(
+  group_by(
+    as_tibble(neighborhood_calming),
+    Neighbourh
+  ),
+  total_speed_cushion = sum(spd_cush, na.rm = TRUE),
+  total_speed_hump = sum(spd_hump, na.rm = TRUE),
+  total_traffic_island = sum(traf_islan, na.rm = TRUE),
+  total_calming = sum(spd_cush, na.rm = TRUE) + sum(spd_hump, na.rm = TRUE) + sum(traf_islan, na.rm = TRUE)
+)
+
+
+neighborhoods_data <- neighborhoods_data %>%
+  left_join(calming_in_each_neighbour, by = "Neighbourh")
+
+
+
+
+
+light_in_each_neighbour = neighborhood_light %>% as_tibble() %>% 
+  group_by(Neighbourh) %>%
+  summarise(light_pole_number=n())
+
+neighborhoods_data <- neighborhoods_data %>%
+  left_join(light_in_each_neighbour, by = "Neighbourh")
+
+
+
+
+signal_in_each_neighbour <- neighborhood_signal %>%
+  as_tibble() %>%
+  group_by(Neighbourh) %>%
+  summarise(signal_pole_number = n())
+
+neighborhoods_data <- neighborhoods_data %>%
+  left_join(signal_in_each_neighbour, by = "Neighbourh")
+
+
+
+
+camera_in_each_neighbour = neighborhood_camera %>% as_tibble() %>% 
+  group_by(Neighbourh) %>%
+  summarise(camera_number=n())
+
+neighborhoods_data <- neighborhoods_data %>%
+  left_join(camera_in_each_neighbour, by = "Neighbourh")
+
+
+
+
+neighborhoods_data$collision_number <- log(neighborhoods_data$collision_number+1)
+neighborhoods_data$camera_number <- log(neighborhoods_data$camera_number+1)
+neighborhoods_data$redlight_camera_number <- log(neighborhoods_data$redlight_camera_number+1)
+neighborhoods_data$light_pole_number <- log(neighborhoods_data$light_pole_number+1)
+neighborhoods_data$signal_pole_number <- log(neighborhoods_data$signal_pole_number+1)
+neighborhoods_data$total_calming <- log(neighborhoods_data$total_calming+1)
+
+```
+
+SAR
+```{r}
+mod_sar_error_lag <- sacsarlm(collision_number ~ redlight_camera_number + total_calming + light_pole_number + signal_pole_number + camera_number, data=neighborhoods_data, listw=sids_queen_w)
+summary(mod_sar_error_lag)
+```
+```{r}
+neighborhoods_data$sar_error_lag_resid<-residuals(mod_sar_error_lag)
+moran.test(neighborhoods_data$sar_error_lag_resid, listw=sids_queen_w)
+```
+CAR
+```{r}
+car_model <- spautolm(collision_number ~ redlight_camera_number + total_calming + light_pole_number + signal_pole_number + camera_number, data=neighborhoods_data, listw=sids_queen_w, family="CAR")
+summary(car_model)
+```
+
+```{r}
+neighborhoods_data$car_resid<-residuals(car_model)
+
+moran.test(neighborhoods_data$car_resid, sids_queen_w)
+```
+
